@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useCallback, useRef } from 'react'
+import { useState, useCallback, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
 type UploadResult = {
@@ -8,6 +8,17 @@ type UploadResult = {
   extrato_id?: string
   transacoes?: number
   erro?: string
+}
+
+type Documento = {
+  id: string
+  mes_referencia: string
+  status: string
+  created_at: string
+  conta_nome: string | null
+  conta_banco: string | null
+  conta_tipo: string | null
+  transacoes: number
 }
 
 type UploadState = 'idle' | 'uploading' | 'classificando' | 'done' | 'error'
@@ -19,10 +30,21 @@ export default function UploadPage() {
   const [files, setFiles] = useState<File[]>([])
   const [contaNome, setContaNome] = useState('')
   const [banco, setBanco] = useState('')
+  const [tipoConta, setTipoConta] = useState<'corrente' | 'cartao'>('corrente')
   const [mesReferencia, setMesReferencia] = useState('')
   const [state, setState] = useState<UploadState>('idle')
   const [resultados, setResultados] = useState<UploadResult[]>([])
   const [dragging, setDragging] = useState(false)
+  const [documentos, setDocumentos] = useState<Documento[]>([])
+
+  const carregarDocumentos = useCallback(() => {
+    fetch('/api/documentos')
+      .then((r) => r.json())
+      .then((d) => { if (!d.error) setDocumentos(d.documentos) })
+      .catch(() => {})
+  }, [])
+
+  useEffect(() => { carregarDocumentos() }, [carregarDocumentos])
 
   const addFiles = useCallback((newFiles: FileList | null) => {
     if (!newFiles) return
@@ -54,7 +76,7 @@ export default function UploadPage() {
       const contaRes = await fetch('/api/contas', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nome: contaNome, banco }),
+        body: JSON.stringify({ nome: contaNome, banco, tipo: tipoConta }),
       })
       const { id: contaId } = await contaRes.json()
 
@@ -83,6 +105,7 @@ export default function UploadPage() {
       }
 
       setState('done')
+      carregarDocumentos()
     } catch {
       setState('error')
     }
@@ -127,6 +150,25 @@ export default function UploadPage() {
                 required
                 className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
               />
+            </div>
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-slate-600 mb-1">Tipo de conta</label>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setTipoConta('corrente')}
+                className={`flex-1 text-sm py-2 rounded-lg border font-medium transition-colors ${tipoConta === 'corrente' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
+              >
+                🏦 Conta corrente
+              </button>
+              <button
+                type="button"
+                onClick={() => setTipoConta('cartao')}
+                className={`flex-1 text-sm py-2 rounded-lg border font-medium transition-colors ${tipoConta === 'cartao' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
+              >
+                💳 Cartão de crédito
+              </button>
             </div>
           </div>
           <div>
@@ -241,6 +283,35 @@ export default function UploadPage() {
               </button>
             </div>
           )}
+        </div>
+      )}
+
+      {/* Registro de documentos enviados */}
+      {documentos.length > 0 && (
+        <div className="mt-8">
+          <h3 className="font-semibold text-slate-700 mb-3">Documentos enviados</h3>
+          <div className="bg-white rounded-xl border border-slate-200 overflow-hidden divide-y divide-slate-100">
+            {documentos.map((d) => (
+              <div key={d.id} className="flex items-center gap-3 px-4 py-3">
+                <span className="text-lg">{d.conta_tipo === 'cartao' ? '💳' : '🏦'}</span>
+                <div className="flex-1 min-w-0">
+                  <p className="text-sm font-medium text-slate-700 truncate">
+                    {d.conta_nome ?? 'Conta'} <span className="text-slate-400 font-normal">· {d.conta_banco}</span>
+                  </p>
+                  <p className="text-xs text-slate-400">
+                    {d.mes_referencia?.slice(0, 7)} · {d.transacoes} transação(ões)
+                  </p>
+                </div>
+                <span className={`text-xs font-medium px-2 py-1 rounded-full ${
+                  d.status === 'processado' ? 'bg-green-100 text-green-700'
+                  : d.status === 'erro' ? 'bg-red-100 text-red-600'
+                  : 'bg-amber-100 text-amber-700'
+                }`}>
+                  {d.status}
+                </span>
+              </div>
+            ))}
+          </div>
         </div>
       )}
     </div>
