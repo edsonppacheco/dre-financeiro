@@ -13,7 +13,6 @@ export const metadata: Metadata = {
 const navLinks = [
   { href: '/', label: 'Upload' },
   { href: '/contas', label: 'Contas' },
-  { href: '/revisao', label: 'Revisão' },
   { href: '/dre', label: 'DRE' },
   { href: '/clientes', label: 'Clientes' },
   { href: '/fornecedores', label: 'Fornecedores' },
