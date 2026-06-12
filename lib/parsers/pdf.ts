@@ -1,73 +1,54 @@
 import { TransacaoParsed } from './excel'
+import { extrairExtratoPDF } from '../claude'
+import { resolverSinais, type SaldoDia } from '../extrato-solver'
 
-// Import dinâmico: o pdf-parse (baseado em pdfjs) pode falhar ao carregar em
-// ambiente serverless. Carregando sob demanda, uploads não-PDF não o tocam e
-// um eventual erro fica isolado nesta função (tratado no try/catch da rota).
-async function getPdfParse() {
+export type ExtratoPDFResult = {
+  transacoes: TransacaoParsed[]
+  saldoInicial: number | null
+  saldosDia: SaldoDia[]
+  diasNaoResolvidos: string[]
+}
+
+// Extrai o texto do PDF. O pdf-parse v2 expõe a classe PDFParse; import dinâmico
+// porque a lib (baseada em pdfjs) não deve ser carregada no topo do módulo em
+// ambiente serverless.
+async function extrairTexto(buffer: ArrayBuffer): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const mod = (await import('pdf-parse')) as any
-  return mod.default ?? mod
-}
-
-// Padrões de linha para extratos bancários brasileiros
-const PATTERNS = [
-  // DD/MM/YYYY descrição valor (com ou sem sinal)
-  /(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+([-+]?\d{1,3}(?:\.\d{3})*(?:,\d{2}))\s*$/,
-  // DD/MM/YYYY descrição R$ valor
-  /(\d{2}\/\d{2}\/\d{4})\s+(.+?)\s+R\$\s*([-+]?\d{1,3}(?:\.\d{3})*(?:,\d{2}))/,
-  // YYYY-MM-DD descricao valor
-  /(\d{4}-\d{2}-\d{2})\s+(.+?)\s+([-+]?\d+[.,]\d{2})\s*$/,
-]
-
-function parseDate(raw: string): string | null {
-  // DD/MM/YYYY → YYYY-MM-DD
-  const dmyMatch = raw.match(/^(\d{2})\/(\d{2})\/(\d{4})$/)
-  if (dmyMatch) return `${dmyMatch[3]}-${dmyMatch[2]}-${dmyMatch[1]}`
-
-  // YYYY-MM-DD
-  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw
-
-  return null
-}
-
-function parseValor(raw: string): number {
-  // Remove pontos de milhar e converte vírgula para ponto
-  return parseFloat(raw.replace(/\./g, '').replace(',', '.'))
-}
-
-export async function parsePDF(buffer: ArrayBuffer): Promise<TransacaoParsed[]> {
-  const uint8 = new Uint8Array(buffer)
-  const nodeBuffer = Buffer.from(uint8)
-
-  const pdfParse = await getPdfParse()
-  const data = await pdfParse(nodeBuffer)
-  const lines = data.text.split('\n').map((l: string) => l.trim()).filter(Boolean)
-
-  const transacoes: TransacaoParsed[] = []
-
-  for (const line of lines) {
-    for (const pattern of PATTERNS) {
-      const match = line.match(pattern)
-      if (!match) continue
-
-      const data = parseDate(match[1])
-      if (!data) continue
-
-      const descricao = match[2].trim()
-      const rawValor = match[3]
-      const numValor = parseValor(rawValor)
-
-      if (isNaN(numValor) || numValor === 0) continue
-
-      transacoes.push({
-        data,
-        descricao,
-        valor: Math.abs(numValor),
-        tipo: numValor >= 0 ? 'credito' : 'debito',
-      })
-      break
-    }
+  const PDFParse = mod.PDFParse ?? mod.default?.PDFParse
+  if (!PDFParse) throw new Error('pdf-parse: PDFParse indisponível')
+  const parser = new PDFParse({ data: Buffer.from(new Uint8Array(buffer)) })
+  try {
+    const { text } = await parser.getText()
+    return text as string
+  } finally {
+    await parser.destroy?.()
   }
+}
 
-  return transacoes
+/**
+ * Parser de extrato em PDF: extrai o texto, usa a IA para estruturar transações
+ * e saldos, e reconstrói os sinais (crédito/débito) de forma determinística pelo
+ * solver, validando contra os saldos diários do documento.
+ */
+export async function parsePDF(buffer: ArrayBuffer): Promise<ExtratoPDFResult> {
+  const texto = await extrairTexto(buffer)
+  if (!texto?.trim()) throw new Error('Não foi possível extrair texto do PDF')
+
+  const extraido = await extrairExtratoPDF(texto)
+  const tx: TransacaoParsed[] = extraido.transacoes.map((t) => ({
+    data: t.data,
+    descricao: t.descricao,
+    valor: Math.abs(Number(t.valor)),
+    tipo: t.tipo === 'credito' ? 'credito' : 'debito',
+  }))
+
+  const { transacoes, diasNaoResolvidos } = resolverSinais(extraido.saldo_inicial, tx, extraido.saldos_dia)
+
+  return {
+    transacoes,
+    saldoInicial: extraido.saldo_inicial,
+    saldosDia: extraido.saldos_dia,
+    diasNaoResolvidos,
+  }
 }
