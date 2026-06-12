@@ -114,6 +114,17 @@ export default function ContasExtratoPage() {
     try { await fetch(`/api/extrato?id=${l.id}`, { method: 'DELETE' }); carregar(contaId) } finally { setBusy(false) }
   }
 
+  const [sugerindo, setSugerindo] = useState(false)
+  const sugerirContas = async () => {
+    setSugerindo(true); setErro(null)
+    try {
+      const res = await fetch('/api/classificar-contabil', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conta_id: contaId }) })
+      const d = await res.json()
+      if (d.error) throw new Error(d.error)
+      carregar(contaId)
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setSugerindo(false) }
+  }
+
   const pessoaValue = (l: Lancamento) => l.cliente_id ? `c:${l.cliente_id}` : l.fornecedor_id ? `f:${l.fornecedor_id}` : ''
   const onPessoaChange = (l: Lancamento, v: string) => {
     if (v === NOVO_CLIENTE) { setPessoaModal({ tipo: 'cliente', lancamentoId: l.id }); setPNome(''); return }
@@ -155,6 +166,7 @@ export default function ContasExtratoPage() {
             {correntes.length > 0 && <optgroup label="🏦 Contas correntes">{correntes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
             {cartoes.length > 0 && <optgroup label="💳 Cartões">{cartoes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
           </select>
+          <button onClick={sugerirContas} disabled={!contaId || sugerindo} className="bg-violet-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-violet-700 disabled:opacity-50">{sugerindo ? 'Classificando…' : '✨ Sugerir contas'}</button>
           <button onClick={() => { setModalNovo(true); setNData('') }} disabled={!contaId} className="bg-slate-800 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">+ Lançamento</button>
           <Link href="/contas/gerenciar" className="text-sm text-slate-500 hover:text-slate-800 px-3 py-2 border border-slate-200 rounded-lg">⚙ Gerenciar</Link>
         </div>

@@ -66,6 +66,52 @@ export type ClassificacaoResult = {
   justificativa: string
 }
 
+/**
+ * Fallback de IA para classificar lançamentos no plano de contas contábeis
+ * (usado só para os que regras + heurística não resolveram).
+ * Retorna [{ id, codigo }] com o código do plano de contas.
+ */
+export async function classificarContaContabilIA(
+  itens: { id: string; descricao: string; valor: number; tipo: string }[],
+  plano: { codigo: string; nome: string; tipo: string }[]
+): Promise<{ id: string; codigo: string }[]> {
+  if (itens.length === 0) return []
+  const planoFmt = plano
+    .filter((p) => p.tipo !== 'grupo')
+    .map((p) => `${p.codigo}: ${p.nome} (${p.tipo})`)
+    .join('\n')
+  const itensFmt = itens
+    .map((i) => `ID: ${i.id} | ${i.tipo} | R$ ${i.valor.toFixed(2)} | ${i.descricao}`)
+    .join('\n')
+
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 4096,
+    system: 'Você classifica lançamentos financeiros no plano de contas contábil de uma empresa. Responda SOMENTE com JSON válido.',
+    messages: [
+      {
+        role: 'user',
+        content: `Classifique cada lançamento na conta contábil mais adequada.
+
+PLANO DE CONTAS:
+${planoFmt}
+
+LANÇAMENTOS:
+${itensFmt}
+
+Retorne um array JSON: [{"id":"<id>","codigo":"<codigo do plano>"}]
+- credito normalmente é Receitas; pagamentos a pessoas físicas tendem a Folha de pagamento; contas de consumo (energia, água, condomínio) são Despesas gerais.
+- Classifique TODOS os lançamentos.`,
+      },
+    ],
+  })
+  const content = response.content[0]
+  if (content.type !== 'text') return []
+  const match = content.text.match(/\[[\s\S]*\]/)
+  if (!match) return []
+  return JSON.parse(match[0]) as { id: string; codigo: string }[]
+}
+
 export async function classificarTransacoes(
   transacoes: Transacao[],
   linhasDre: { codigo: string; nome: string; tipo: string }[]

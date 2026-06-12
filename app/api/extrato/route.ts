@@ -1,5 +1,24 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase'
+import { extrairChave } from '@/lib/classificador-contabil'
+
+// Aprendizado: ao definir a conta contábil de um lançamento, guarda/reforça a
+// regra "contraparte -> conta" para classificar lançamentos futuros parecidos.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function aprenderRegra(supabase: any, descricao: string, contaContabilId: string) {
+  try {
+    const chave = extrairChave(descricao)
+    if (!chave) return
+    const { data: existente } = await supabase.from('regras_classificacao').select('id, ocorrencias').eq('chave', chave).maybeSingle()
+    if (existente) {
+      await supabase.from('regras_classificacao').update({
+        conta_contabil_id: contaContabilId, ocorrencias: existente.ocorrencias + 1, updated_at: new Date().toISOString(),
+      }).eq('id', existente.id)
+    } else {
+      await supabase.from('regras_classificacao').insert({ chave, conta_contabil_id: contaContabilId })
+    }
+  } catch { /* tabela de regras pode não existir ainda */ }
+}
 
 // PATCH /api/extrato — edita um lançamento (valor, tipo, cliente, fornecedor, conta contábil, descrição)
 export async function PATCH(req: NextRequest) {
@@ -30,6 +49,12 @@ export async function PATCH(req: NextRequest) {
       .select('id, data, descricao, valor, tipo, cliente_id, fornecedor_id, conta_contabil_id, manual')
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+
+    // Aprende a regra quando o usuário define (não limpa) a conta contábil
+    if (body.conta_contabil_id && data?.descricao) {
+      await aprenderRegra(supabase, data.descricao, body.conta_contabil_id)
+    }
+
     return NextResponse.json({ lancamento: data })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
