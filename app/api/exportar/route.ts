@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ExcelJS from 'exceljs'
 import { createSupabaseAdminClient } from '@/lib/supabase'
+import { calcularDre, type ItemClassificado, type LinhaDreBase } from '@/lib/dre'
 
 export async function GET(req: NextRequest) {
   try {
@@ -10,28 +11,22 @@ export async function GET(req: NextRequest) {
 
     const supabase = createSupabaseAdminClient()
 
-    const { data: linhas } = await supabase.from('linhas_dre').select('*').order('ordem')
-    if (!linhas?.length) return NextResponse.json({ error: 'Nenhuma linha DRE' }, { status: 400 })
+    const { data: linhasRaw } = await supabase.from('linhas_dre').select('codigo, nome, tipo, ordem').order('ordem')
+    if (!linhasRaw?.length) return NextResponse.json({ error: 'Nenhuma linha DRE' }, { status: 400 })
+    const linhasBase = linhasRaw as LinhaDreBase[]
 
-    // Agrega valores por linha DRE no mês
+    // Agrega valores por linha DRE no mês (respeitando correções)
     const { data: agregado } = await supabase
       .from('classificacoes')
-      .select(`
-        linha_dre,
-        transacoes!inner(valor, tipo, extrato_id,
-          extratos!inner(mes_referencia)
-        )
-      `)
+      .select('linha_dre, corrigido_para, transacoes!inner(valor, tipo, extratos!inner(mes_referencia))')
       .eq('transacoes.extratos.mes_referencia', `${mes}-01`)
 
-    const totais: Record<string, number> = {}
-    for (const item of agregado ?? []) {
+    const itens: ItemClassificado[] = (agregado ?? [])
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const tx = item.transacoes as unknown as { valor: number; tipo: string } | null
-      if (!tx) continue
-      const valor = tx.tipo === 'debito' ? -tx.valor : tx.valor
-      totais[item.linha_dre] = (totais[item.linha_dre] ?? 0) + valor
-    }
+      .map((c: any) => (c.transacoes ? { linha_dre: c.linha_dre, corrigido_para: c.corrigido_para, valor: c.transacoes.valor, tipo: c.transacoes.tipo } : null))
+      .filter((x): x is ItemClassificado => x !== null)
+
+    const linhas = calcularDre(linhasBase, itens)
 
     // Gera Excel
     const workbook = new ExcelJS.Workbook()
@@ -62,7 +57,7 @@ export async function GET(req: NextRequest) {
     for (const linha of linhas) {
       const isGrupo = linha.tipo === 'grupo'
       const isResultado = linha.tipo === 'resultado'
-      const valor = totais[linha.codigo] ?? (isGrupo || isResultado ? null : 0)
+      const valor = linha.valor
 
       const row = sheet.addRow([linha.codigo, linha.nome, valor])
 
