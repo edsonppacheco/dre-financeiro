@@ -21,6 +21,7 @@ type Lancamento = {
 type ExtratoResp = {
   conta: Conta
   lancamentos: Lancamento[]
+  meses: string[]
   saldoDocumentoPorData: Record<string, number>
   saldoCalculadoFimDia: Record<string, number>
   alertas: Record<string, { calculado: number; documento: number; diff: number }>
@@ -41,6 +42,7 @@ export default function ContasExtratoPage() {
   const [loading, setLoading] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
+  const [mes, setMes] = useState('')
   const [modalNovo, setModalNovo] = useState(false)
 
   // form de lançamento manual
@@ -59,16 +61,17 @@ export default function ContasExtratoPage() {
     })
   }, [])
 
-  const carregar = useCallback((id: string) => {
+  const carregar = useCallback((id: string, mesArg: string) => {
     if (!id) return
-    fetch(`/api/extrato?conta_id=${id}`)
+    const qs = mesArg ? `&mes=${mesArg}` : ''
+    fetch(`/api/extrato?conta_id=${id}${qs}`)
       .then((r) => r.json())
       .then((d) => { if (d.error) throw new Error(d.error); setExt(d) })
       .catch((e) => setErro(e.message))
       .finally(() => setLoading(false))
   }, [])
 
-  useEffect(() => { if (contaId) carregar(contaId) }, [contaId, carregar])
+  useEffect(() => { if (contaId) carregar(contaId, mes) }, [contaId, mes, carregar])
 
   const planoFolhas = useMemo(
     () => (ext?.planoContas ?? []).filter((p) => p.tipo !== 'grupo'),
@@ -91,7 +94,7 @@ export default function ContasExtratoPage() {
       const res = await fetch('/api/extrato', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await res.json()
       if (d.error) throw new Error(d.error)
-      carregar(contaId)
+      carregar(contaId, mes)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
 
@@ -104,14 +107,14 @@ export default function ContasExtratoPage() {
       const d = await res.json()
       if (d.error) throw new Error(d.error)
       setModalNovo(false); setNDescricao(''); setNValor('')
-      carregar(contaId)
+      carregar(contaId, mes)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
 
   const remover = async (l: Lancamento) => {
     if (!confirm(`Remover o lançamento "${l.descricao}"?`)) return
     setBusy(true)
-    try { await fetch(`/api/extrato?id=${l.id}`, { method: 'DELETE' }); carregar(contaId) } finally { setBusy(false) }
+    try { await fetch(`/api/extrato?id=${l.id}`, { method: 'DELETE' }); carregar(contaId, mes) } finally { setBusy(false) }
   }
 
   const [sugerindo, setSugerindo] = useState(false)
@@ -121,7 +124,7 @@ export default function ContasExtratoPage() {
       const res = await fetch('/api/classificar-contabil', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conta_id: contaId }) })
       const d = await res.json()
       if (d.error) throw new Error(d.error)
-      carregar(contaId)
+      carregar(contaId, mes)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setSugerindo(false) }
   }
 
@@ -146,7 +149,7 @@ export default function ContasExtratoPage() {
       // vincula ao lançamento e recarrega (traz a nova pessoa na lista)
       await fetch('/api/extrato', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: pessoaModal.lancamentoId, ...campo }) })
       setPessoaModal(null)
-      carregar(contaId)
+      carregar(contaId, mes)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
 
@@ -161,10 +164,18 @@ export default function ContasExtratoPage() {
           <p className="text-slate-500 mt-1">Extrato cronológico, saldos diários e classificação</p>
         </div>
         <div className="flex items-center gap-2">
-          <select value={contaId} onChange={(e) => setContaId(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500">
+          <select value={contaId} onChange={(e) => { setContaId(e.target.value); setMes('') }} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500">
             {contas.length === 0 && <option value="">Nenhuma conta</option>}
             {correntes.length > 0 && <optgroup label="🏦 Contas correntes">{correntes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
             {cartoes.length > 0 && <optgroup label="💳 Cartões">{cartoes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
+          </select>
+          <select value={mes} onChange={(e) => setMes(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500" title="Filtrar por período">
+            <option value="">Todos os períodos</option>
+            {(ext?.meses ?? []).map((m) => {
+              const [a, mm] = m.split('-')
+              const nomes = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
+              return <option key={m} value={m}>{nomes[Number(mm)]}/{a}</option>
+            })}
           </select>
           <button onClick={sugerirContas} disabled={!contaId || sugerindo} className="bg-violet-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-violet-700 disabled:opacity-50">{sugerindo ? 'Classificando…' : '✨ Sugerir contas'}</button>
           <button onClick={() => { setModalNovo(true); setNData('') }} disabled={!contaId} className="bg-slate-800 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">+ Lançamento</button>

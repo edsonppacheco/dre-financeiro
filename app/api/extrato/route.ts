@@ -20,6 +20,23 @@ async function aprenderRegra(supabase: any, descricao: string, contaContabilId: 
   } catch { /* tabela de regras pode não existir ainda */ }
 }
 
+// Aprendizado de cliente/fornecedor: ao vincular uma pessoa a um lançamento,
+// guarda/reforça a regra "contraparte -> pessoa" para lançamentos futuros.
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+async function aprenderPessoa(supabase: any, descricao: string, campo: 'cliente_id' | 'fornecedor_id', pessoaId: string) {
+  try {
+    const chave = extrairChave(descricao)
+    if (!chave) return
+    const outro = campo === 'cliente_id' ? 'fornecedor_id' : 'cliente_id'
+    const { data: existente } = await supabase.from('regras_pessoa').select('id, ocorrencias').eq('chave', chave).maybeSingle()
+    if (existente) {
+      await supabase.from('regras_pessoa').update({ [campo]: pessoaId, [outro]: null, ocorrencias: existente.ocorrencias + 1, updated_at: new Date().toISOString() }).eq('id', existente.id)
+    } else {
+      await supabase.from('regras_pessoa').insert({ chave, [campo]: pessoaId })
+    }
+  } catch { /* tabela pode não existir ainda */ }
+}
+
 // PATCH /api/extrato — edita um lançamento (valor, tipo, cliente, fornecedor, conta contábil, descrição)
 export async function PATCH(req: NextRequest) {
   try {
@@ -50,9 +67,11 @@ export async function PATCH(req: NextRequest) {
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
 
-    // Aprende a regra quando o usuário define (não limpa) a conta contábil
-    if (body.conta_contabil_id && data?.descricao) {
-      await aprenderRegra(supabase, data.descricao, body.conta_contabil_id)
+    // Aprende as regras quando o usuário define conta contábil ou cliente/fornecedor
+    if (data?.descricao) {
+      if (body.conta_contabil_id) await aprenderRegra(supabase, data.descricao, body.conta_contabil_id)
+      if (body.cliente_id) await aprenderPessoa(supabase, data.descricao, 'cliente_id', body.cliente_id)
+      if (body.fornecedor_id) await aprenderPessoa(supabase, data.descricao, 'fornecedor_id', body.fornecedor_id)
     }
 
     return NextResponse.json({ lancamento: data })
@@ -159,6 +178,11 @@ export async function GET(req: NextRequest) {
       }
     }
 
+    // Meses disponíveis (para o filtro de período) e filtro opcional por mês
+    const meses = Array.from(new Set(lancamentos.map((l) => l.data.slice(0, 7)))).sort().reverse()
+    const mes = searchParams.get('mes')
+    const lancamentosFiltrados = mes ? lancamentos.filter((l) => l.data.startsWith(mes)) : lancamentos
+
     // Dados auxiliares para os dropdowns de edição
     const [plano, clientes, fornecedores] = await Promise.all([
       supabase.from('plano_contas').select('id, codigo, nome, tipo').order('ordem'),
@@ -168,7 +192,9 @@ export async function GET(req: NextRequest) {
 
     return NextResponse.json({
       conta,
-      lancamentos,
+      lancamentos: lancamentosFiltrados,
+      meses,
+      mes: mes ?? null,
       saldoDocumentoPorData,
       saldoCalculadoFimDia,
       alertas,

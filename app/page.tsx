@@ -28,9 +28,8 @@ export default function UploadPage() {
   const fileInputRef = useRef<HTMLInputElement>(null)
 
   const [files, setFiles] = useState<File[]>([])
-  const [contaNome, setContaNome] = useState('')
-  const [banco, setBanco] = useState('')
-  const [tipoConta, setTipoConta] = useState<'corrente' | 'cartao'>('corrente')
+  const [contas, setContas] = useState<{ id: string; nome: string; banco: string; tipo: string }[]>([])
+  const [contaId, setContaId] = useState('')
   const [mesReferencia, setMesReferencia] = useState('')
   const [state, setState] = useState<UploadState>('idle')
   const [resultados, setResultados] = useState<UploadResult[]>([])
@@ -44,7 +43,10 @@ export default function UploadPage() {
       .catch(() => {})
   }, [])
 
-  useEffect(() => { carregarDocumentos() }, [carregarDocumentos])
+  useEffect(() => {
+    carregarDocumentos()
+    fetch('/api/contas').then((r) => r.json()).then((d) => { if (d.contas) setContas(d.contas) }).catch(() => {})
+  }, [carregarDocumentos])
 
   const addFiles = useCallback((newFiles: FileList | null) => {
     if (!newFiles) return
@@ -66,20 +68,12 @@ export default function UploadPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!files.length || !contaNome || !banco || !mesReferencia) return
+    if (!files.length || !contaId || !mesReferencia) return
 
     setState('uploading')
     setResultados([])
 
     try {
-      // Cria ou recupera conta (simplificado — em produção seria um select-or-insert)
-      const contaRes = await fetch('/api/contas', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ nome: contaNome, banco, tipo: tipoConta }),
-      })
-      const { id: contaId } = await contaRes.json()
-
       const formData = new FormData()
       formData.append('conta_id', contaId)
       formData.append('mes_referencia', mesReferencia)
@@ -125,62 +119,42 @@ export default function UploadPage() {
       </div>
 
       <form onSubmit={handleSubmit} className="space-y-6">
-        {/* Dados da conta */}
+        {/* Conta de destino */}
         <div className="bg-white rounded-xl border border-slate-200 p-6 space-y-4">
-          <h2 className="font-semibold text-slate-700">Dados da conta</h2>
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-slate-600 mb-1">Nome da conta</label>
-              <input
-                type="text"
-                value={contaNome}
-                onChange={(e) => setContaNome(e.target.value)}
-                placeholder="Ex: Conta Corrente Principal"
-                required
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
-              />
+          <h2 className="font-semibold text-slate-700">Conta do extrato</h2>
+          {contas.length === 0 ? (
+            <p className="text-sm text-slate-500">
+              Nenhuma conta cadastrada.{' '}
+              <a href="/contas/gerenciar" className="text-slate-800 font-medium underline">Cadastre uma conta</a> antes de enviar o extrato.
+            </p>
+          ) : (
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Conta</label>
+                <select
+                  value={contaId}
+                  onChange={(e) => setContaId(e.target.value)}
+                  required
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
+                >
+                  <option value="">Selecione a conta…</option>
+                  {contas.map((c) => (
+                    <option key={c.id} value={c.id}>{c.tipo === 'cartao' ? '💳' : '🏦'} {c.nome} · {c.banco}</option>
+                  ))}
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Mês de referência</label>
+                <input
+                  type="month"
+                  value={mesReferencia}
+                  onChange={(e) => setMesReferencia(e.target.value)}
+                  required
+                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
+                />
+              </div>
             </div>
-            <div>
-              <label className="block text-sm font-medium text-slate-600 mb-1">Banco</label>
-              <input
-                type="text"
-                value={banco}
-                onChange={(e) => setBanco(e.target.value)}
-                placeholder="Ex: Bradesco"
-                required
-                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
-              />
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-600 mb-1">Tipo de conta</label>
-            <div className="flex gap-2">
-              <button
-                type="button"
-                onClick={() => setTipoConta('corrente')}
-                className={`flex-1 text-sm py-2 rounded-lg border font-medium transition-colors ${tipoConta === 'corrente' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
-              >
-                🏦 Conta corrente
-              </button>
-              <button
-                type="button"
-                onClick={() => setTipoConta('cartao')}
-                className={`flex-1 text-sm py-2 rounded-lg border font-medium transition-colors ${tipoConta === 'cartao' ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-300 hover:bg-slate-50'}`}
-              >
-                💳 Cartão de crédito
-              </button>
-            </div>
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-slate-600 mb-1">Mês de referência</label>
-            <input
-              type="month"
-              value={mesReferencia}
-              onChange={(e) => setMesReferencia(e.target.value)}
-              required
-              className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
-            />
-          </div>
+          )}
         </div>
 
         {/* Área de drop */}
@@ -241,7 +215,7 @@ export default function UploadPage() {
         {/* Botão de envio */}
         <button
           type="submit"
-          disabled={state === 'uploading' || state === 'classificando' || !files.length}
+          disabled={state === 'uploading' || state === 'classificando' || !files.length || !contaId || !mesReferencia}
           className="w-full bg-slate-800 text-white py-3 rounded-xl font-semibold text-sm hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {state === 'uploading' && 'Enviando e processando...'}
@@ -276,10 +250,10 @@ export default function UploadPage() {
           {state === 'done' && resultados.some((r) => !r.erro) && (
             <div className="px-4 py-4 bg-slate-50 border-t border-slate-100">
               <button
-                onClick={() => router.push('/revisao')}
+                onClick={() => router.push('/contas')}
                 className="w-full bg-green-600 text-white py-2.5 rounded-lg font-semibold text-sm hover:bg-green-700 transition-colors"
               >
-                Revisar classificações →
+                Ver no extrato →
               </button>
             </div>
           )}
@@ -302,6 +276,14 @@ export default function UploadPage() {
                     {d.mes_referencia?.slice(0, 7)} · {d.transacoes} transação(ões)
                   </p>
                 </div>
+                <a
+                  href={`/api/documentos/arquivo?id=${d.id}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-slate-500 hover:text-slate-800 underline whitespace-nowrap"
+                >
+                  Ver arquivo
+                </a>
                 <span className={`text-xs font-medium px-2 py-1 rounded-full ${
                   d.status === 'processado' ? 'bg-green-100 text-green-700'
                   : d.status === 'erro' ? 'bg-red-100 text-red-600'
