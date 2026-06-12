@@ -9,21 +9,16 @@ export type ExtratoPDFResult = {
   diasNaoResolvidos: string[]
 }
 
-// Extrai o texto do PDF. O pdf-parse v2 expõe a classe PDFParse; import dinâmico
-// porque a lib (baseada em pdfjs) não deve ser carregada no topo do módulo em
-// ambiente serverless.
+// Extrai o texto do PDF. Usa pdf-parse@1.x via o módulo interno
+// ('pdf-parse/lib/pdf-parse.js'), que evita o código de debug do index.js e usa
+// um pdfjs compatível com Node serverless (o pdf-parse v2 quebra com "DOMMatrix
+// is not defined" no runtime da Vercel). Import dinâmico (lazy) por segurança.
 async function extrairTexto(buffer: ArrayBuffer): Promise<string> {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
-  const mod = (await import('pdf-parse')) as any
-  const PDFParse = mod.PDFParse ?? mod.default?.PDFParse
-  if (!PDFParse) throw new Error('pdf-parse: PDFParse indisponível')
-  const parser = new PDFParse({ data: Buffer.from(new Uint8Array(buffer)) })
-  try {
-    const { text } = await parser.getText()
-    return text as string
-  } finally {
-    await parser.destroy?.()
-  }
+  const mod = (await import('pdf-parse/lib/pdf-parse.js')) as any
+  const pdfParse = mod.default ?? mod
+  const data = await pdfParse(Buffer.from(new Uint8Array(buffer)))
+  return (data?.text as string) ?? ''
 }
 
 /**
