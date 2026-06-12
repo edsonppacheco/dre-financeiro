@@ -1,0 +1,12 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "dre-financeiro",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev", "--", "-p", "3001"],
+      "port": 3001,
+      "cwd": "/Users/edsonperdigaopacheco/Projects/dre-financeiro"
+    }
+  ]
+}
