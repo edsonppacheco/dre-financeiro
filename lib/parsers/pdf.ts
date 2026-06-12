@@ -1,7 +1,13 @@
-import * as pdfParseLib from 'pdf-parse'
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-const pdfParse = (pdfParseLib as any).default ?? pdfParseLib
 import { TransacaoParsed } from './excel'
+
+// Import dinâmico: o pdf-parse (baseado em pdfjs) pode falhar ao carregar em
+// ambiente serverless. Carregando sob demanda, uploads não-PDF não o tocam e
+// um eventual erro fica isolado nesta função (tratado no try/catch da rota).
+async function getPdfParse() {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const mod = (await import('pdf-parse')) as any
+  return mod.default ?? mod
+}
 
 // Padrões de linha para extratos bancários brasileiros
 const PATTERNS = [
@@ -33,6 +39,7 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<TransacaoParsed[]> 
   const uint8 = new Uint8Array(buffer)
   const nodeBuffer = Buffer.from(uint8)
 
+  const pdfParse = await getPdfParse()
   const data = await pdfParse(nodeBuffer)
   const lines = data.text.split('\n').map((l: string) => l.trim()).filter(Boolean)
 
