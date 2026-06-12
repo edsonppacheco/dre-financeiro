@@ -18,20 +18,28 @@ export async function parseExcel(buffer: ArrayBuffer): Promise<TransacaoParsed[]
   let headerRow = 1
   let colData = 0, colDescricao = 0, colValor = 0, colTipo = 0, colDebito = 0, colCredito = 0
 
+  // 1) Encontra a linha de cabeçalho (a primeira, nas 20 iniciais, que contém uma célula "data")
+  let headerValues: (string | number | Date | null)[] | null = null
   worksheet.eachRow((row, rowNum) => {
-    if (rowNum > 20) return // só busca cabeçalho nas primeiras 20 linhas
+    if (rowNum > 20 || headerValues) return
     const values = row.values as (string | number | Date | null)[]
+    const temData = values.some((c) => ['data', 'date', 'dt'].includes(String(c ?? '').toLowerCase().trim()))
+    if (temData) { headerRow = rowNum; headerValues = values }
+  })
 
-    values.forEach((cell, colIdx) => {
+  // 2) Mapeia as colunas usando SOMENTE a linha de cabeçalho (evita confundir com
+  //    valores das linhas de dados, ex: coluna "Tipo" com "debito"/"credito")
+  if (headerValues) {
+    ;(headerValues as (string | number | Date | null)[]).forEach((cell, colIdx) => {
       const val = String(cell ?? '').toLowerCase().trim()
-      if (['data', 'date', 'dt'].includes(val)) { colData = colIdx; headerRow = rowNum }
+      if (['data', 'date', 'dt'].includes(val)) colData = colIdx
       if (['histórico', 'descricao', 'descrição', 'description', 'memo'].includes(val)) colDescricao = colIdx
       if (['valor', 'value', 'amount', 'vlr'].includes(val)) colValor = colIdx
       if (['tipo', 'type', 'natureza'].includes(val)) colTipo = colIdx
       if (['débito', 'debito', 'saída', 'saida'].includes(val)) colDebito = colIdx
       if (['crédito', 'credito', 'entrada'].includes(val)) colCredito = colIdx
     })
-  })
+  }
 
   worksheet.eachRow((row, rowNum) => {
     if (rowNum <= headerRow) return
