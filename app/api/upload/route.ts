@@ -22,10 +22,11 @@ export async function POST(req: NextRequest) {
       const buffer = await file.arrayBuffer()
       const ext = file.name.split('.').pop()?.toLowerCase()
 
-      // Upload para Vercel Blob
+      // Upload para Vercel Blob (addRandomSuffix evita conflito ao reenviar o mesmo arquivo)
       const blob = await put(`extratos/${contaId}/${mesReferencia}/${file.name}`, buffer, {
         access: 'private',
         contentType: file.type,
+        addRandomSuffix: true,
       })
 
       // Cria registro do extrato
