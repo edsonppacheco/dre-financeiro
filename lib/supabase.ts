@@ -2,7 +2,10 @@ import { createClient, SupabaseClient } from '@supabase/supabase-js'
 import { createServerClient, type CookieOptions } from '@supabase/ssr'
 import { cookies } from 'next/headers'
 
-export type Conta = { id: string; nome: string; banco: string; created_at: string }
+export type Conta = { id: string; nome: string; banco: string; tipo: 'corrente' | 'cartao'; created_at: string }
+export type PlanoConta = { id: string; codigo: string; nome: string; tipo: string; pai_id: string | null; ordem: number; created_at: string }
+export type Cliente = { id: string; nome: string; cnpj: string | null; email: string | null; telefone: string | null; endereco: string | null; razao_social: string | null; created_at: string }
+export type Fornecedor = Omit<Cliente, never>
 export type Extrato = { id: string; conta_id: string; mes_referencia: string; arquivo_url: string; status: string; created_at: string }
 export type Transacao = { id: string; extrato_id: string; data: string; descricao: string; valor: number; tipo: string; created_at: string }
 export type Classificacao = { id: string; transacao_id: string; linha_dre: string; confianca: number; revisado: boolean; corrigido_para: string | null; created_at: string }
