@@ -15,6 +15,8 @@ const navLinks = [
   { href: '/contas', label: 'Contas' },
   { href: '/revisao', label: 'Revisão' },
   { href: '/dre', label: 'DRE' },
+  { href: '/clientes', label: 'Clientes' },
+  { href: '/fornecedores', label: 'Fornecedores' },
   { href: '/configuracoes', label: 'Configurações' },
 ]
 
