@@ -34,3 +34,32 @@ export function calcularDrePlano(
   const lucroLiquido = round(folhas.reduce((s, f) => s + (somaPorConta[f.id] ?? 0), 0))
   return { linhas, lucroLiquido }
 }
+
+export type LinhaDreMulti = { codigo: string; nome: string; tipo: string; nivel: number; valores: Record<string, number> }
+
+/**
+ * DRE com múltiplas colunas de período. `somasPorColuna` mapeia a chave da
+ * coluna -> (conta_contabil_id -> soma com sinal). Reaproveita calcularDrePlano
+ * por coluna e monta a matriz linha × coluna.
+ */
+export function calcularDreMulti(
+  plano: PlanoLinha[],
+  colunas: string[],
+  somasPorColuna: Record<string, Record<string, number>>
+): { linhas: LinhaDreMulti[]; lucroLiquido: Record<string, number> } {
+  const porColuna: Record<string, ReturnType<typeof calcularDrePlano>> = {}
+  for (const col of colunas) porColuna[col] = calcularDrePlano(plano, somasPorColuna[col] ?? {})
+
+  const ordenadas = [...plano].sort((a, b) => a.ordem - b.ordem)
+  const linhas: LinhaDreMulti[] = ordenadas.map((p) => {
+    const valores: Record<string, number> = {}
+    for (const col of colunas) {
+      const l = porColuna[col].linhas.find((x) => x.codigo === p.codigo)
+      valores[col] = l?.valor ?? 0
+    }
+    return { codigo: p.codigo, nome: p.nome, tipo: p.tipo, nivel: p.pai_id ? 1 : 0, valores }
+  })
+  const lucroLiquido: Record<string, number> = {}
+  for (const col of colunas) lucroLiquido[col] = porColuna[col].lucroLiquido
+  return { linhas, lucroLiquido }
+}
