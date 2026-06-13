@@ -32,6 +32,9 @@ type ExtratoResp = {
 
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const fmtData = (s: string) => { const [a, m, d] = s.split('-'); return `${d}/${m}/${a}` }
+const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
+const fmtNum = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+const parseNum = (s: string) => Number(String(s).replace(/\./g, '').replace(',', '.')) || 0
 const NOVO_CLIENTE = '__novo_cliente__'
 const NOVO_FORNECEDOR = '__novo_fornecedor__'
 
@@ -57,9 +60,24 @@ export default function ContasExtratoPage() {
 
   useEffect(() => {
     fetch('/api/contas').then((r) => r.json()).then((d) => {
-      if (d.contas) { setContas(d.contas); if (d.contas[0]) setContaId(d.contas[0].id) }
+      if (!d.contas) return
+      setContas(d.contas)
+      // Restaura a última visualização (conta + período)
+      const savedConta = typeof window !== 'undefined' ? localStorage.getItem('extrato_conta') : null
+      const savedMes = typeof window !== 'undefined' ? localStorage.getItem('extrato_mes') : null
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      const existe = d.contas.find((c: any) => c.id === savedConta)
+      setContaId(existe ? savedConta! : d.contas[0]?.id ?? '')
+      if (savedMes) setMes(savedMes)
     })
   }, [])
+
+  // Salva a última visualização
+  useEffect(() => {
+    if (typeof window === 'undefined' || !contaId) return
+    localStorage.setItem('extrato_conta', contaId)
+    localStorage.setItem('extrato_mes', mes)
+  }, [contaId, mes])
 
   const carregar = useCallback((id: string, mesArg: string) => {
     if (!id) return
@@ -75,6 +93,11 @@ export default function ContasExtratoPage() {
 
   const planoFolhas = useMemo(
     () => (ext?.planoContas ?? []).filter((p) => p.tipo !== 'grupo'),
+    [ext]
+  )
+
+  const anosDosMeses = useMemo(
+    () => Array.from(new Set((ext?.meses ?? []).map((m) => m.split('-')[0]))),
     [ext]
   )
 
@@ -169,13 +192,16 @@ export default function ContasExtratoPage() {
             {correntes.length > 0 && <optgroup label="🏦 Contas correntes">{correntes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
             {cartoes.length > 0 && <optgroup label="💳 Cartões">{cartoes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
           </select>
-          <select value={mes} onChange={(e) => setMes(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500" title="Filtrar por período">
-            <option value="">Todos os períodos</option>
-            {(ext?.meses ?? []).map((m) => {
-              const [a, mm] = m.split('-')
-              const nomes = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
-              return <option key={m} value={m}>{nomes[Number(mm)]}/{a}</option>
-            })}
+          <select value={mes} onChange={(e) => setMes(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-500" title="Filtrar por período">
+            <option value="">📅 Todos os períodos</option>
+            {anosDosMeses.map((ano) => (
+              <optgroup key={ano} label={ano}>
+                {(ext?.meses ?? []).filter((m) => m.startsWith(ano)).map((m) => {
+                  const mm = Number(m.split('-')[1])
+                  return <option key={m} value={m}>{MESES_PT[mm - 1]}</option>
+                })}
+              </optgroup>
+            ))}
           </select>
           <button onClick={sugerirContas} disabled={!contaId || sugerindo} className="bg-violet-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-violet-700 disabled:opacity-50">{sugerindo ? 'Classificando…' : '✨ Sugerir contas'}</button>
           <button onClick={() => { setModalNovo(true); setNData('') }} disabled={!contaId} className="bg-slate-800 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">+ Lançamento</button>
@@ -225,9 +251,9 @@ export default function ContasExtratoPage() {
                       {planoFolhas.map((p) => <option key={p.id} value={p.id}>{p.codigo} · {p.nome}</option>)}
                     </select>
                     <div className="flex items-center justify-end gap-1">
-                      <input type="number" step="0.01" defaultValue={l.valor} disabled={busy}
-                        onBlur={(e) => { const v = Number(e.target.value); if (v !== l.valor) patch({ id: l.id, valor: v }) }}
-                        className={`w-20 border border-slate-200 rounded px-2 py-1 text-xs text-right font-medium ${l.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`} />
+                      <input type="text" inputMode="decimal" defaultValue={fmtNum(l.valor)} disabled={busy}
+                        onBlur={(e) => { const v = parseNum(e.target.value); if (v !== l.valor) patch({ id: l.id, valor: v }); else e.target.value = fmtNum(l.valor) }}
+                        className={`w-24 border border-slate-200 rounded px-2 py-1 text-xs text-right font-medium ${l.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`} />
                       <select value={l.tipo} disabled={busy} onChange={(e) => patch({ id: l.id, tipo: e.target.value })}
                         className={`border border-slate-200 rounded px-1 py-1 text-xs font-medium ${l.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
                         <option value="credito">C</option>

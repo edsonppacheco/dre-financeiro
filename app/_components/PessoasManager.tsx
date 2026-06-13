@@ -112,6 +112,22 @@ export default function PessoasManager({
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
 
+  const oposto = singular.toLowerCase() === 'cliente' ? 'fornecedor' : 'cliente'
+  const converter = async (p: Pessoa) => {
+    if (!confirm(`Converter "${p.nome}" para ${oposto}? As transações vinculadas serão movidas.`)) return
+    setBusy(true); setErro(null)
+    try {
+      const res = await fetch('/api/pessoas/converter', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: p.id, de: singular.toLowerCase() }),
+      })
+      const d = await res.json()
+      if (d.error) throw new Error(d.error)
+      setPessoas((prev) => prev.filter((x) => x.id !== p.id))
+      setSelecionado(null)
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
+  }
+
   const abrirDetalhe = async (p: Pessoa) => {
     setSelecionado(p)
     setCarregandoDet(true)
@@ -154,8 +170,9 @@ export default function PessoasManager({
                   {selecionado.endereco && <p>{selecionado.endereco}</p>}
                 </div>
               </div>
-              <div className="flex gap-2">
+              <div className="flex gap-2 items-start">
                 <button onClick={() => abrirEdicao(selecionado)} className="text-sm text-slate-500 hover:text-slate-800">✎ Editar</button>
+                <button onClick={() => converter(selecionado)} disabled={busy} className="text-sm text-slate-500 hover:text-slate-800 whitespace-nowrap disabled:opacity-50">↔ Tornar {oposto}</button>
                 <button onClick={() => remover(selecionado)} className="text-sm text-slate-400 hover:text-red-500">🗑</button>
               </div>
             </div>

@@ -68,7 +68,7 @@ export default function UploadPage() {
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    if (!files.length || !contaId || !mesReferencia) return
+    if (!files.length || !contaId) return
 
     setState('uploading')
     setResultados([])
@@ -76,7 +76,7 @@ export default function UploadPage() {
     try {
       const formData = new FormData()
       formData.append('conta_id', contaId)
-      formData.append('mes_referencia', mesReferencia)
+      if (mesReferencia) formData.append('mes_referencia', mesReferencia)
       files.forEach((f) => formData.append('files', f))
 
       const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData })
@@ -144,12 +144,11 @@ export default function UploadPage() {
                 </select>
               </div>
               <div>
-                <label className="block text-sm font-medium text-slate-600 mb-1">Mês de referência</label>
+                <label className="block text-sm font-medium text-slate-600 mb-1">Mês de referência <span className="text-slate-400 font-normal">(opcional)</span></label>
                 <input
                   type="month"
                   value={mesReferencia}
                   onChange={(e) => setMesReferencia(e.target.value)}
-                  required
                   className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
                 />
               </div>
@@ -215,7 +214,7 @@ export default function UploadPage() {
         {/* Botão de envio */}
         <button
           type="submit"
-          disabled={state === 'uploading' || state === 'classificando' || !files.length || !contaId || !mesReferencia}
+          disabled={state === 'uploading' || state === 'classificando' || !files.length || !contaId}
           className="w-full bg-slate-800 text-white py-3 rounded-xl font-semibold text-sm hover:bg-slate-700 disabled:opacity-50 disabled:cursor-not-allowed transition-colors"
         >
           {state === 'uploading' && 'Enviando e processando...'}

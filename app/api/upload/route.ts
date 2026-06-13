@@ -9,9 +9,11 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData()
     const files = formData.getAll('files') as File[]
     const contaId = formData.get('conta_id') as string
-    const mesReferencia = formData.get('mes_referencia') as string
+    // Mês de referência é opcional (a DRE usa a data real das transações).
+    // Quando ausente, usa o mês atual apenas como rótulo do documento.
+    const mesReferencia = (formData.get('mes_referencia') as string) || new Date().toISOString().slice(0, 7)
 
-    if (!files.length || !contaId || !mesReferencia) {
+    if (!files.length || !contaId) {
       return NextResponse.json({ error: 'Campos obrigatórios ausentes' }, { status: 400 })
     }
 
