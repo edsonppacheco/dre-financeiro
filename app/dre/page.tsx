@@ -5,6 +5,7 @@ import { useCallback, useEffect, useState } from 'react'
 type Coluna = { chave: string; label: string }
 type LinhaCalc = { codigo: string; nome: string; tipo: string; nivel: number; valores: Record<string, number> }
 type Visao = 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes'
+type BalancoCol = { contasCorrentes: number; cartoes: number; emprestimos: number; lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number }
 
 const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
@@ -18,6 +19,7 @@ export default function DrePage() {
   const [colunas, setColunas] = useState<Coluna[]>([])
   const [linhas, setLinhas] = useState<LinhaCalc[]>([])
   const [lucroLiquido, setLucroLiquido] = useState<Record<string, number>>({})
+  const [balanco, setBalanco] = useState<Record<string, BalancoCol>>({})
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
 
@@ -31,7 +33,7 @@ export default function DrePage() {
       .then((r) => r.json())
       .then((d) => {
         if (d.error) throw new Error(d.error)
-        setAnos(d.anos); setAno(d.ano); setColunas(d.colunas); setLinhas(d.linhas); setLucroLiquido(d.lucroLiquido)
+        setAnos(d.anos); setAno(d.ano); setColunas(d.colunas); setLinhas(d.linhas); setLucroLiquido(d.lucroLiquido); setBalanco(d.balanco ?? {})
       })
       .catch((e) => setErro(e.message))
       .finally(() => setLoading(false))
@@ -139,8 +141,49 @@ export default function DrePage() {
         </div>
       )}
 
+      {/* Balanço — foto no fim de cada período, nas mesmas colunas */}
+      {colunas.length > 0 && Object.keys(balanco).length > 0 && (() => {
+        const temEmprestimo = colunas.some((c) => Math.abs(balanco[c.chave]?.emprestimos ?? 0) > 0.005)
+        const cell = (key: string, v: number, pos = false) => (
+          <td key={key} className={`px-4 py-2.5 text-right tabular-nums ${v < 0 ? 'text-red-600' : v > 0 ? (pos ? 'text-green-600' : 'text-slate-700') : 'text-slate-300'}`}>{v === 0 ? '—' : fmt(v)}</td>
+        )
+        const linha = (label: string, get: (b: BalancoCol) => number, opts: { grupo?: boolean; pos?: boolean; total?: boolean } = {}) => (
+          <tr className={`border-b border-slate-100 ${opts.grupo ? 'bg-slate-50 font-semibold text-slate-700 uppercase text-xs tracking-wide' : opts.total ? 'font-semibold text-slate-800' : 'text-slate-600'}`}>
+            <td className={`px-4 py-2.5 ${!opts.grupo && !opts.total ? 'pl-8' : ''}`}>{label}</td>
+            {colunas.map((c) => opts.grupo ? <td key={c.chave} /> : cell(c.chave, get(balanco[c.chave]), opts.pos))}
+          </tr>
+        )
+        return (
+          <div className="mt-8">
+            <h2 className="text-lg font-bold text-slate-800 mb-3">Balanço Patrimonial <span className="text-sm font-normal text-slate-400">— no fim de cada período</span></h2>
+            <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
+              <table className="w-full text-sm">
+                <thead>
+                  <tr className="border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
+                    <th className="px-4 py-3 font-medium text-left">Conta</th>
+                    {colunas.map((c) => <th key={c.chave} className="px-4 py-3 font-medium text-right whitespace-nowrap">{c.label}</th>)}
+                  </tr>
+                </thead>
+                <tbody>
+                  {linha('Ativos', () => 0, { grupo: true })}
+                  {linha('Saldo em contas correntes', (b) => b.contasCorrentes, { pos: true })}
+                  {linha('Total de ativos', (b) => b.contasCorrentes, { total: true })}
+                  {linha('Passivos e Patrimônio', () => 0, { grupo: true })}
+                  {linha('Cartões de crédito (saldo)', (b) => b.cartoes)}
+                  {temEmprestimo && linha('Empréstimos (saldo)', (b) => b.emprestimos)}
+                  {linha('Lucro líquido (período)', (b) => b.lucroLiquido, { pos: true })}
+                  {linha('Lucros distribuídos (período)', (b) => -b.lucrosDistribuidos)}
+                  {linha('Lucros retidos (acumulado)', (b) => b.lucrosRetidos, { pos: true, total: true })}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        )
+      })()}
+
       <p className="text-xs text-slate-400 mt-3">
         Valores somados pela conta contábil atribuída no extrato, pela data real de cada lançamento. Receitas positivas; impostos e despesas, negativas.
+        O balanço é a posição no fim de cada período: saldos das contas (acumulados) e os lucros do período/acumulados.
       </p>
     </div>
   )

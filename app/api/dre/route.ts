@@ -61,7 +61,53 @@ export async function GET(req: NextRequest) {
     const chaves = colunas.map((c) => c.chave)
     const { linhas, lucroLiquido } = calcularDreMulti(plano, chaves, somasPorColuna)
 
-    return NextResponse.json({ anos, ano, visao, colunas, linhas, lucroLiquido, totalTransacoes: (txs ?? []).length })
+    // ---- Balanço (foto no fim de cada coluna) ----
+    const round = (x: number) => Math.round(x * 100) / 100
+    const { data: contasRaw } = await supabase.from('contas').select('id, tipo, saldo_inicial')
+    const tipoConta: Record<string, string> = {}
+    const saldoIni: Record<string, number> = {}
+    for (const c of contasRaw ?? []) { tipoConta[c.id] = c.tipo; saldoIni[c.id] = Number(c.saldo_inicial ?? 0) }
+
+    // Todas as transações até o fim do ano (cumulativo p/ saldos e lucros retidos)
+    const { data: txAll } = await supabase
+      .from('transacoes')
+      .select('conta_id, data, valor, tipo, conta_contabil_id')
+      .lte('data', `${ano}-12-31`)
+
+    const distribIds = plano.filter((p) => p.tipo === 'distribuicao').map((p) => p.id)
+    const balanco: Record<string, {
+      contasCorrentes: number; cartoes: number; emprestimos: number
+      lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number
+    }> = {}
+
+    for (const col of colunas) {
+      let corr = 0, cart = 0, empr = 0, retido = 0
+      for (const c of contasRaw ?? []) {
+        if (tipoConta[c.id] === 'corrente') corr += saldoIni[c.id]
+        else if (tipoConta[c.id] === 'cartao') cart += saldoIni[c.id]
+        else if (tipoConta[c.id] === 'emprestimo') empr += saldoIni[c.id]
+      }
+      for (const t of txAll ?? []) {
+        if ((t.data as string) > col.fim) continue
+        const signed = t.tipo === 'credito' ? Number(t.valor) : -Number(t.valor)
+        const tp = tipoConta[t.conta_id as string]
+        if (tp === 'corrente') corr += signed
+        else if (tp === 'cartao') cart += signed
+        else if (tp === 'emprestimo') empr += signed
+        if (t.conta_contabil_id) retido += signed // lucro acumulado (retido)
+      }
+      const distribPeriodo = distribIds.reduce((s, id) => s + (somasPorColuna[col.chave]?.[id] ?? 0), 0)
+      balanco[col.chave] = {
+        contasCorrentes: round(corr),
+        cartoes: round(cart),
+        emprestimos: round(empr),
+        lucroLiquido: lucroLiquido[col.chave],
+        lucrosDistribuidos: round(-distribPeriodo), // magnitude (saída)
+        lucrosRetidos: round(retido),
+      }
+    }
+
+    return NextResponse.json({ anos, ano, visao, colunas, linhas, lucroLiquido, balanco, totalTransacoes: (txs ?? []).length })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
   }
