@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 
-type Conta = { id: string; nome: string; banco: string; tipo: 'corrente' | 'cartao'; saldo_inicial?: number }
+type Conta = { id: string; nome: string; banco: string; tipo: 'corrente' | 'cartao' | 'emprestimo'; saldo_inicial?: number }
 type PlanoConta = { id: string; codigo: string; nome: string; tipo: string }
 type Pessoa = { id: string; nome: string }
 type Lancamento = {
@@ -178,6 +178,26 @@ export default function ContasExtratoPage() {
 
   const correntes = contas.filter((c) => c.tipo === 'corrente')
   const cartoes = contas.filter((c) => c.tipo === 'cartao')
+  const emprestimos = contas.filter((c) => c.tipo === 'emprestimo')
+
+  // transferência entre contas
+  const [transfModal, setTransfModal] = useState(false)
+  const [tDestino, setTDestino] = useState('')
+  const [tData, setTData] = useState('')
+  const [tValor, setTValor] = useState('')
+  const [tDesc, setTDesc] = useState('')
+  const criarTransferencia = async () => {
+    if (!contaId || !tDestino || !tData || !tValor) return
+    setBusy(true); setErro(null)
+    try {
+      const res = await fetch('/api/transferencias', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ conta_origem_id: contaId, conta_destino_id: tDestino, data: tData, valor: parseNum(tValor), descricao: tDesc || null }) })
+      const d = await res.json()
+      if (d.error) throw new Error(d.error)
+      setTransfModal(false); setTDestino(''); setTValor(''); setTDesc('')
+      carregar(contaId, mes)
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
+  }
 
   return (
     <div className="max-w-5xl mx-auto">
@@ -191,6 +211,7 @@ export default function ContasExtratoPage() {
             {contas.length === 0 && <option value="">Nenhuma conta</option>}
             {correntes.length > 0 && <optgroup label="🏦 Contas correntes">{correntes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
             {cartoes.length > 0 && <optgroup label="💳 Cartões">{cartoes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
+            {emprestimos.length > 0 && <optgroup label="💰 Empréstimos">{emprestimos.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
           </select>
           <select value={mes} onChange={(e) => setMes(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-500" title="Filtrar por período">
             <option value="">📅 Todos os períodos</option>
@@ -204,6 +225,7 @@ export default function ContasExtratoPage() {
             ))}
           </select>
           <button onClick={sugerirContas} disabled={!contaId || sugerindo} className="bg-violet-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-violet-700 disabled:opacity-50">{sugerindo ? 'Classificando…' : '✨ Sugerir contas'}</button>
+          <button onClick={() => { setTransfModal(true); setTData('') }} disabled={!contaId || contas.length < 2} className="bg-white border border-slate-300 text-slate-700 text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">⇄ Transferir</button>
           <button onClick={() => { setModalNovo(true); setNData('') }} disabled={!contaId} className="bg-slate-800 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">+ Lançamento</button>
           <Link href="/contas/gerenciar" className="text-sm text-slate-500 hover:text-slate-800 px-3 py-2 border border-slate-200 rounded-lg">⚙ Gerenciar</Link>
         </div>
@@ -312,6 +334,43 @@ export default function ContasExtratoPage() {
             <div className="flex justify-end gap-2 mt-5">
               <button onClick={() => setModalNovo(false)} className="text-sm text-slate-500 px-3 py-2">Cancelar</button>
               <button onClick={criarManual} disabled={busy || !nData || !nDescricao || !nValor} className="bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">Criar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal transferência entre contas */}
+      {transfModal && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={() => setTransfModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-bold text-slate-800 mb-1">Transferência entre contas</h2>
+            <p className="text-xs text-slate-400 mb-4">Cria dois lançamentos: débito em {contas.find((c) => c.id === contaId)?.nome} e crédito na conta de destino.</p>
+            <div className="space-y-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Para (conta de destino)</label>
+                <select value={tDestino} onChange={(e) => setTDestino(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+                  <option value="">Selecione…</option>
+                  {contas.filter((c) => c.id !== contaId).map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+                </select>
+              </div>
+              <div className="flex gap-3">
+                <div>
+                  <label className="block text-xs font-medium text-slate-500 mb-1">Data</label>
+                  <input type="date" value={tData} onChange={(e) => setTData(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                </div>
+                <div className="flex-1">
+                  <label className="block text-xs font-medium text-slate-500 mb-1">Valor</label>
+                  <input type="text" inputMode="decimal" value={tValor} onChange={(e) => setTValor(e.target.value)} placeholder="0,00" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+                </div>
+              </div>
+              <div>
+                <label className="block text-xs font-medium text-slate-500 mb-1">Descrição (opcional)</label>
+                <input value={tDesc} onChange={(e) => setTDesc(e.target.value)} placeholder="Ex: Pagamento da fatura" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
+              </div>
+            </div>
+            <div className="flex justify-end gap-2 mt-5">
+              <button onClick={() => setTransfModal(false)} className="text-sm text-slate-500 px-3 py-2">Cancelar</button>
+              <button onClick={criarTransferencia} disabled={busy || !tDestino || !tData || !tValor} className="bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">Transferir</button>
             </div>
           </div>
         </div>

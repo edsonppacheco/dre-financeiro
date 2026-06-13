@@ -146,6 +146,25 @@ export default function ConfiguracoesPage() {
     }
   }
 
+  // Reposiciona uma conta raiz, trocando a ordem com a vizinha
+  const moverRaiz = async (c: PlanoConta, dir: -1 | 1) => {
+    const raizes = contas.filter((x) => !x.pai_id).sort((a, b) => a.ordem - b.ordem)
+    const i = raizes.findIndex((x) => x.id === c.id)
+    const j = i + dir
+    if (i < 0 || j < 0 || j >= raizes.length) return
+    const a = raizes[i], b = raizes[j]
+    setBusy(true); setErro(null)
+    try {
+      await Promise.all([
+        fetch('/api/plano-contas', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: a.id, ordem: b.ordem }) }),
+        fetch('/api/plano-contas', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: b.id, ordem: a.ordem }) }),
+      ])
+      setContas((prev) => prev.map((x) => x.id === a.id ? { ...x, ordem: b.ordem } : x.id === b.id ? { ...x, ordem: a.ordem } : x))
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Erro ao reposicionar') } finally { setBusy(false) }
+  }
+
+  const raizesOrdenadas = contas.filter((c) => !c.pai_id).sort((a, b) => a.ordem - b.ordem)
+
   return (
     <div className="max-w-3xl mx-auto">
       <div className="mb-6">
@@ -223,6 +242,12 @@ export default function ConfiguracoesPage() {
                   <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${tipoCor[conta.tipo] ?? 'bg-slate-100 text-slate-500'}`}>
                     {TIPOS.find((t) => t.value === conta.tipo)?.label ?? conta.tipo}
                   </span>
+                  {nivel === 0 && (
+                    <>
+                      <button onClick={() => moverRaiz(conta, -1)} disabled={busy || raizesOrdenadas[0]?.id === conta.id} className="text-slate-400 hover:text-slate-700 text-sm disabled:opacity-30" title="Mover para cima">↑</button>
+                      <button onClick={() => moverRaiz(conta, 1)} disabled={busy || raizesOrdenadas[raizesOrdenadas.length - 1]?.id === conta.id} className="text-slate-400 hover:text-slate-700 text-sm disabled:opacity-30" title="Mover para baixo">↓</button>
+                    </>
+                  )}
                   <button onClick={() => iniciarEdicao(conta)} className="text-slate-400 hover:text-slate-700 text-sm" title="Editar">✎</button>
                   <button onClick={() => remover(conta)} className="text-slate-400 hover:text-red-500 text-sm" title="Excluir">🗑</button>
                 </>

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase'
 
-const TIPOS = ['corrente', 'cartao']
+const TIPOS = ['corrente', 'cartao', 'emprestimo']
 
 export async function GET() {
   const supabase = createSupabaseAdminClient()

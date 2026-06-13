@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 
-type Conta = { id: string; nome: string; banco: string; tipo: 'corrente' | 'cartao' }
+type Conta = { id: string; nome: string; banco: string; tipo: 'corrente' | 'cartao' | 'emprestimo' }
 
 export default function GerenciarContasPage() {
   const [contas, setContas] = useState<Conta[]>([])
@@ -12,7 +12,7 @@ export default function GerenciarContasPage() {
 
   const [nNome, setNNome] = useState('')
   const [nBanco, setNBanco] = useState('')
-  const [nTipo, setNTipo] = useState<'corrente' | 'cartao'>('corrente')
+  const [nTipo, setNTipo] = useState<'corrente' | 'cartao' | 'emprestimo'>('corrente')
 
   const [editId, setEditId] = useState<string | null>(null)
   const [eNome, setENome] = useState('')
@@ -30,6 +30,7 @@ export default function GerenciarContasPage() {
 
   const correntes = useMemo(() => contas.filter((c) => c.tipo === 'corrente'), [contas])
   const cartoes = useMemo(() => contas.filter((c) => c.tipo === 'cartao'), [contas])
+  const emprestimos = useMemo(() => contas.filter((c) => c.tipo === 'emprestimo'), [contas])
 
   const criar = async () => {
     if (!nNome.trim() || !nBanco.trim()) return
@@ -111,9 +112,10 @@ export default function GerenciarContasPage() {
           </div>
           <div>
             <label className="block text-xs font-medium text-slate-500 mb-1">Tipo</label>
-            <select value={nTipo} onChange={(e) => setNTipo(e.target.value as 'corrente' | 'cartao')} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500">
+            <select value={nTipo} onChange={(e) => setNTipo(e.target.value as 'corrente' | 'cartao' | 'emprestimo')} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500">
               <option value="corrente">Conta corrente</option>
               <option value="cartao">Cartão de crédito</option>
+              <option value="emprestimo">Empréstimo</option>
             </select>
           </div>
           <button onClick={criar} disabled={busy || !nNome.trim() || !nBanco.trim()} className="bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">Adicionar</button>
@@ -136,6 +138,14 @@ export default function GerenciarContasPage() {
               {cartoes.length === 0 ? <p className="px-4 py-6 text-sm text-slate-400 text-center">Nenhum cartão</p> : cartoes.map((c) => <Linha key={c.id} c={c} />)}
             </div>
           </div>
+          {emprestimos.length > 0 && (
+            <div>
+              <h2 className="text-sm font-semibold text-slate-600 mb-2 flex items-center gap-2">💰 Empréstimos <span className="text-xs text-slate-400">({emprestimos.length})</span></h2>
+              <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+                {emprestimos.map((c) => <Linha key={c.id} c={c} />)}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>

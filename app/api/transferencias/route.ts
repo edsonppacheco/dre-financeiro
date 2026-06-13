@@ -1,17 +1,9 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase'
 
-export async function GET() {
-  const supabase = createSupabaseAdminClient()
-  const { data, error } = await supabase
-    .from('transferencias')
-    .select('id, data, valor, descricao, conta_origem_id, conta_destino_id, origem:conta_origem_id(nome), destino:conta_destino_id(nome)')
-    .order('data', { ascending: false })
-    .limit(50)
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  return NextResponse.json({ transferencias: data ?? [] })
-}
-
+// POST — transferência entre contas: cria DOIS lançamentos simultâneos
+// (débito na origem, crédito no destino). Sem conta contábil, para não
+// distorcer a DRE (transferência não é receita nem despesa).
 export async function POST(req: NextRequest) {
   try {
     const { conta_origem_id, conta_destino_id, data, valor, descricao } = await req.json()
@@ -21,32 +13,30 @@ export async function POST(req: NextRequest) {
     if (conta_origem_id === conta_destino_id) {
       return NextResponse.json({ error: 'origem e destino devem ser contas diferentes' }, { status: 400 })
     }
-    if (Number(valor) <= 0) {
-      return NextResponse.json({ error: 'valor deve ser positivo' }, { status: 400 })
-    }
+    const v = Number(valor)
+    if (isNaN(v) || v <= 0) return NextResponse.json({ error: 'valor deve ser positivo' }, { status: 400 })
 
     const supabase = createSupabaseAdminClient()
-    const { data: nova, error } = await supabase
+    const { data: contas } = await supabase.from('contas').select('id, nome').in('id', [conta_origem_id, conta_destino_id])
+    const nome = (id: string) => contas?.find((c) => c.id === id)?.nome ?? 'conta'
+
+    // Registro da transferência (para histórico)
+    const { data: transf, error: tErr } = await supabase
       .from('transferencias')
-      .insert({ conta_origem_id, conta_destino_id, data, valor: Number(valor), descricao: descricao || null })
-      .select('id, data, valor, descricao, conta_origem_id, conta_destino_id')
+      .insert({ conta_origem_id, conta_destino_id, data, valor: v, descricao: descricao || null })
+      .select('id')
       .single()
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json({ transferencia: nova })
-  } catch (err: unknown) {
-    return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
-  }
-}
+    if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 })
 
-export async function DELETE(req: NextRequest) {
-  try {
-    const { searchParams } = new URL(req.url)
-    const id = searchParams.get('id')
-    if (!id) return NextResponse.json({ error: 'id obrigatório' }, { status: 400 })
-    const supabase = createSupabaseAdminClient()
-    const { error } = await supabase.from('transferencias').delete().eq('id', id)
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-    return NextResponse.json({ ok: true })
+    // Dois lançamentos simultâneos
+    const base = { data, valor: v, manual: true }
+    const { error: lErr } = await supabase.from('transacoes').insert([
+      { ...base, conta_id: conta_origem_id, tipo: 'debito', descricao: descricao || `Transferência para ${nome(conta_destino_id)}` },
+      { ...base, conta_id: conta_destino_id, tipo: 'credito', descricao: descricao || `Transferência de ${nome(conta_origem_id)}` },
+    ])
+    if (lErr) return NextResponse.json({ error: lErr.message }, { status: 500 })
+
+    return NextResponse.json({ id: transf.id })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
   }

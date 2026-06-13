@@ -139,7 +139,7 @@ export default function UploadPage() {
                 >
                   <option value="">Selecione a conta…</option>
                   {contas.map((c) => (
-                    <option key={c.id} value={c.id}>{c.tipo === 'cartao' ? '💳' : '🏦'} {c.nome} · {c.banco}</option>
+                    <option key={c.id} value={c.id}>{c.tipo === 'cartao' ? '💳' : c.tipo === 'emprestimo' ? '💰' : '🏦'} {c.nome} · {c.banco}</option>
                   ))}
                 </select>
               </div>
