@@ -17,6 +17,8 @@ type Lancamento = {
   conta_contabil_id: string | null
   manual: boolean
   saldo_calculado: number
+  transferencia_id: string | null
+  transferencia_contraparte: string | null
 }
 type ExtratoResp = {
   conta: Conta
@@ -292,23 +294,32 @@ export default function ContasExtratoPage() {
                     <div className="text-sm text-slate-700 truncate" title={l.descricao}>
                       {l.descricao}{l.manual && <span className="ml-1 text-[10px] text-slate-400">(manual)</span>}
                     </div>
-                    <select value={pessoaValue(l)} disabled={busy} onChange={(e) => onPessoaChange(l, e.target.value)} className="border border-slate-200 rounded px-2 py-1 text-xs w-full">
-                      <option value="">—</option>
-                      <option value={NOVO_CLIENTE}>➕ Novo cliente…</option>
-                      <option value={NOVO_FORNECEDOR}>➕ Novo fornecedor…</option>
-                      <optgroup label="Clientes">{ext.clientes.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.nome}</option>)}</optgroup>
-                      <optgroup label="Fornecedores">{ext.fornecedores.map((f) => <option key={f.id} value={`f:${f.id}`}>{f.nome}</option>)}</optgroup>
-                    </select>
-                    <select value={l.conta_contabil_id ?? ''} disabled={busy} onChange={(e) => patch({ id: l.id, conta_contabil_id: e.target.value })} className="border border-slate-200 rounded px-2 py-1 text-xs w-full">
-                      <option value="">—</option>
-                      {planoFolhas.map((p) => <option key={p.id} value={p.id}>{p.codigo} · {p.nome}</option>)}
-                    </select>
+                    {l.transferencia_id ? (
+                      <div className="col-span-2 text-xs text-slate-500 flex items-center gap-1.5">
+                        <span className="px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-medium">⇄ Transferência</span>
+                        <span className="truncate">{l.tipo === 'debito' ? 'para' : 'de'} {l.transferencia_contraparte ?? '—'}</span>
+                      </div>
+                    ) : (
+                      <>
+                        <select value={pessoaValue(l)} disabled={busy} onChange={(e) => onPessoaChange(l, e.target.value)} className="border border-slate-200 rounded px-2 py-1 text-xs w-full">
+                          <option value="">—</option>
+                          <option value={NOVO_CLIENTE}>➕ Novo cliente…</option>
+                          <option value={NOVO_FORNECEDOR}>➕ Novo fornecedor…</option>
+                          <optgroup label="Clientes">{ext.clientes.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.nome}</option>)}</optgroup>
+                          <optgroup label="Fornecedores">{ext.fornecedores.map((f) => <option key={f.id} value={`f:${f.id}`}>{f.nome}</option>)}</optgroup>
+                        </select>
+                        <select value={l.conta_contabil_id ?? ''} disabled={busy} onChange={(e) => patch({ id: l.id, conta_contabil_id: e.target.value })} className="border border-slate-200 rounded px-2 py-1 text-xs w-full">
+                          <option value="">—</option>
+                          {planoFolhas.map((p) => <option key={p.id} value={p.id}>{p.codigo} · {p.nome}</option>)}
+                        </select>
+                      </>
+                    )}
                     <div className="flex items-center justify-end gap-1">
                       <input type="text" inputMode="decimal" defaultValue={fmtNum(l.valor)} disabled={busy}
                         onBlur={(e) => { const v = parseNum(e.target.value); if (v !== l.valor) patch({ id: l.id, valor: v }); else e.target.value = fmtNum(l.valor) }}
                         className={`w-24 border border-slate-200 rounded px-2 py-1 text-xs text-right font-medium ${l.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`} />
-                      <select value={l.tipo} disabled={busy} onChange={(e) => patch({ id: l.id, tipo: e.target.value })}
-                        className={`border border-slate-200 rounded px-1 py-1 text-xs font-medium ${l.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>
+                      <select value={l.tipo} disabled={busy || !!l.transferencia_id} onChange={(e) => patch({ id: l.id, tipo: e.target.value })}
+                        className={`border border-slate-200 rounded px-1 py-1 text-xs font-medium ${l.tipo === 'credito' ? 'text-green-600' : 'text-red-600'} disabled:opacity-60`}>
                         <option value="credito">C</option>
                         <option value="debito">D</option>
                       </select>

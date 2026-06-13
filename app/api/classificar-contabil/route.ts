@@ -16,6 +16,7 @@ export async function POST(req: NextRequest) {
       .from('transacoes')
       .select('id, descricao, valor, tipo, conta_contabil_id, cliente_id, fornecedor_id')
       .eq('conta_id', conta_id)
+      .is('transferencia_id', null)
     if (!txs?.length) return NextResponse.json({ classificadas: 0, porRegra: 0, porHeuristica: 0, porIA: 0, pessoas: 0 })
 
     const { data: plano } = await supabase.from('plano_contas').select('id, codigo, nome, tipo')

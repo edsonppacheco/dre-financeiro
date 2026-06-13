@@ -28,8 +28,8 @@ export async function POST(req: NextRequest) {
       .single()
     if (tErr) return NextResponse.json({ error: tErr.message }, { status: 500 })
 
-    // Dois lançamentos simultâneos
-    const base = { data, valor: v, manual: true }
+    // Dois lançamentos simultâneos, vinculados à transferência
+    const base = { data, valor: v, manual: true, transferencia_id: transf.id }
     const { error: lErr } = await supabase.from('transacoes').insert([
       { ...base, conta_id: conta_origem_id, tipo: 'debito', descricao: descricao || `Transferência para ${nome(conta_destino_id)}` },
       { ...base, conta_id: conta_destino_id, tipo: 'credito', descricao: descricao || `Transferência de ${nome(conta_origem_id)}` },

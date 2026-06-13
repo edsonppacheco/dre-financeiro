@@ -42,6 +42,27 @@ export async function PATCH(req: NextRequest) {
   try {
     const body = await req.json()
     if (!body.id) return NextResponse.json({ error: 'id obrigatório' }, { status: 400 })
+
+    const supabase = createSupabaseAdminClient()
+
+    // Se for um lançamento de transferência, propaga valor/data aos dois lados
+    const { data: atual } = await supabase.from('transacoes').select('transferencia_id').eq('id', body.id).single()
+    if (atual?.transferencia_id) {
+      const campos: Record<string, unknown> = {}
+      if (body.valor !== undefined) {
+        const v = Number(body.valor)
+        if (isNaN(v) || v <= 0) return NextResponse.json({ error: 'valor inválido' }, { status: 400 })
+        campos.valor = v
+      }
+      if (body.data !== undefined) campos.data = body.data
+      if (!Object.keys(campos).length) return NextResponse.json({ error: 'numa transferência só dá para editar valor e data' }, { status: 400 })
+      // atualiza os dois lançamentos vinculados e o registro da transferência
+      await supabase.from('transacoes').update(campos).eq('transferencia_id', atual.transferencia_id)
+      await supabase.from('transferencias').update(campos).eq('id', atual.transferencia_id)
+      const { data } = await supabase.from('transacoes').select('id, data, descricao, valor, tipo, manual, transferencia_id').eq('id', body.id).single()
+      return NextResponse.json({ lancamento: data, transferencia: true })
+    }
+
     const update: Record<string, unknown> = {}
     if (body.valor !== undefined) {
       const v = Number(body.valor)
@@ -58,7 +79,6 @@ export async function PATCH(req: NextRequest) {
     if (body.conta_contabil_id !== undefined) update.conta_contabil_id = body.conta_contabil_id || null
     if (!Object.keys(update).length) return NextResponse.json({ error: 'nada para atualizar' }, { status: 400 })
 
-    const supabase = createSupabaseAdminClient()
     const { data, error } = await supabase
       .from('transacoes')
       .update(update)
@@ -117,6 +137,15 @@ export async function DELETE(req: NextRequest) {
     const id = searchParams.get('id')
     if (!id) return NextResponse.json({ error: 'id obrigatório' }, { status: 400 })
     const supabase = createSupabaseAdminClient()
+
+    // Se for transferência, remove o registro (cascata apaga os dois lançamentos)
+    const { data: atual } = await supabase.from('transacoes').select('transferencia_id').eq('id', id).single()
+    if (atual?.transferencia_id) {
+      const { error } = await supabase.from('transferencias').delete().eq('id', atual.transferencia_id)
+      if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      return NextResponse.json({ ok: true, transferencia: true })
+    }
+
     const { error } = await supabase.from('transacoes').delete().eq('id', id)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
     return NextResponse.json({ ok: true })
@@ -144,11 +173,26 @@ export async function GET(req: NextRequest) {
 
     const { data: txs, error: txErr } = await supabase
       .from('transacoes')
-      .select('id, data, descricao, valor, tipo, cliente_id, fornecedor_id, conta_contabil_id, manual')
+      .select('id, data, descricao, valor, tipo, cliente_id, fornecedor_id, conta_contabil_id, manual, transferencia_id')
       .eq('conta_id', contaId)
       .order('data', { ascending: true })
       .order('created_at', { ascending: true })
     if (txErr) return NextResponse.json({ error: txErr.message }, { status: 500 })
+
+    // Conta de contrapartida das transferências (a "conta de pagamento")
+    const transfIds = Array.from(new Set((txs ?? []).map((t) => t.transferencia_id).filter(Boolean)))
+    const contraparteNome: Record<string, string> = {} // transferencia_id -> nome da outra conta
+    if (transfIds.length) {
+      const { data: transfs } = await supabase
+        .from('transferencias')
+        .select('id, conta_origem_id, conta_destino_id, origem:conta_origem_id(nome), destino:conta_destino_id(nome)')
+        .in('id', transfIds as string[])
+      for (const tr of transfs ?? []) {
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const t = tr as any
+        contraparteNome[t.id] = t.conta_origem_id === contaId ? (t.destino?.nome ?? '—') : (t.origem?.nome ?? '—')
+      }
+    }
 
     // Saldos extraídos do documento (fim de dia), por data
     const { data: saldosDoc } = await supabase
@@ -162,7 +206,12 @@ export async function GET(req: NextRequest) {
     let acumulado = Number(conta.saldo_inicial ?? 0)
     const lancamentos = (txs ?? []).map((t) => {
       acumulado += t.tipo === 'credito' ? Number(t.valor) : -Number(t.valor)
-      return { ...t, valor: Number(t.valor), saldo_calculado: Math.round(acumulado * 100) / 100 }
+      return {
+        ...t,
+        valor: Number(t.valor),
+        saldo_calculado: Math.round(acumulado * 100) / 100,
+        transferencia_contraparte: t.transferencia_id ? contraparteNome[t.transferencia_id] ?? null : null,
+      }
     })
 
     // Saldo calculado de fim de dia = saldo após o último lançamento de cada data
