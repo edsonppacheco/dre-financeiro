@@ -140,6 +140,36 @@ export default function ContasExtratoPage() {
     try { await fetch(`/api/extrato?id=${l.id}`, { method: 'DELETE' }); carregar(contaId, mes) } finally { setBusy(false) }
   }
 
+  // conciliação de extratos sobrepostos
+  type ConcItem = { id: string; data: string; valor: number; tipo: string; descricao: string; motivo?: string }
+  type ConcPar = { overlap: { inicio: string; fim: string }; anterior: { id: string; periodo: string }; prevalece: { id: string; periodo: string }; duplicatas: ConcItem[]; ambiguos: ConcItem[] }
+  const [concModal, setConcModal] = useState(false)
+  const [concPares, setConcPares] = useState<ConcPar[] | null>(null)
+  const [concSel, setConcSel] = useState<Set<string>>(new Set())
+  const conciliar = async () => {
+    setConcModal(true); setConcPares(null); setErro(null)
+    try {
+      const d = await fetch(`/api/conciliacao?conta_id=${contaId}`).then((r) => r.json())
+      if (d.error) throw new Error(d.error)
+      setConcPares(d.pares)
+      // duplicatas confiáveis já vêm marcadas
+      const sel = new Set<string>()
+      for (const p of d.pares as ConcPar[]) for (const x of p.duplicatas) sel.add(x.id)
+      setConcSel(sel)
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Erro'); setConcModal(false) }
+  }
+  const aplicarConciliacao = async () => {
+    const remover = Array.from(concSel)
+    if (!remover.length) { setConcModal(false); return }
+    setBusy(true)
+    try {
+      const d = await fetch('/api/conciliacao', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remover }) }).then((r) => r.json())
+      if (d.error) throw new Error(d.error)
+      setConcModal(false); carregar(contaId, mes)
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
+  }
+  const toggleConc = (id: string) => setConcSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
+
   const [sugerindo, setSugerindo] = useState(false)
   const sugerirContas = async () => {
     setSugerindo(true); setErro(null)
@@ -225,6 +255,7 @@ export default function ContasExtratoPage() {
             ))}
           </select>
           <button onClick={sugerirContas} disabled={!contaId || sugerindo} className="bg-violet-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-violet-700 disabled:opacity-50">{sugerindo ? 'Classificando…' : '✨ Sugerir contas'}</button>
+          <button onClick={conciliar} disabled={!contaId} className="bg-white border border-slate-300 text-slate-700 text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">⚖ Conciliar</button>
           <button onClick={() => { setTransfModal(true); setTData('') }} disabled={!contaId || contas.length < 2} className="bg-white border border-slate-300 text-slate-700 text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">⇄ Transferir</button>
           <button onClick={() => { setModalNovo(true); setNData('') }} disabled={!contaId} className="bg-slate-800 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">+ Lançamento</button>
           <Link href="/contas/gerenciar" className="text-sm text-slate-500 hover:text-slate-800 px-3 py-2 border border-slate-200 rounded-lg">⚙ Gerenciar</Link>
@@ -334,6 +365,63 @@ export default function ContasExtratoPage() {
             <div className="flex justify-end gap-2 mt-5">
               <button onClick={() => setModalNovo(false)} className="text-sm text-slate-500 px-3 py-2">Cancelar</button>
               <button onClick={criarManual} disabled={busy || !nData || !nDescricao || !nValor} className="bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">Criar</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Modal conciliação */}
+      {concModal && (
+        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={() => setConcModal(false)}>
+          <div className="bg-white rounded-xl shadow-xl w-full max-w-2xl max-h-[85vh] overflow-y-auto p-5" onClick={(e) => e.stopPropagation()}>
+            <h2 className="font-bold text-slate-800 mb-1">Conciliação de extratos</h2>
+            <p className="text-xs text-slate-400 mb-4">Detecta transações duplicadas entre extratos com datas sobrepostas. As de alta confiança já vêm marcadas para remoção; revise as dúvidas.</p>
+            {concPares === null ? (
+              <p className="py-8 text-center text-slate-400 text-sm">Analisando…</p>
+            ) : concPares.length === 0 ? (
+              <p className="py-8 text-center text-slate-500 text-sm">✓ Nenhuma sobreposição com duplicatas encontrada nesta conta.</p>
+            ) : (
+              <div className="space-y-5">
+                {concPares.map((p, idx) => (
+                  <div key={idx} className="border border-slate-200 rounded-lg p-3">
+                    <p className="text-xs text-slate-500 mb-2">
+                      Sobreposição <b>{fmtData(p.overlap.inicio)}–{fmtData(p.overlap.fim)}</b>. Prevalece o extrato {p.prevalece.periodo}; removendo duplicatas do extrato {p.anterior.periodo}.
+                    </p>
+                    {p.duplicatas.length > 0 && (
+                      <div className="mb-2">
+                        <p className="text-[11px] font-semibold text-green-700 uppercase mb-1">Duplicatas (alta confiança)</p>
+                        {p.duplicatas.map((x) => (
+                          <label key={x.id} className="flex items-center gap-2 text-sm py-1">
+                            <input type="checkbox" checked={concSel.has(x.id)} onChange={() => toggleConc(x.id)} />
+                            <span className="text-slate-500 w-12">{fmtData(x.data).slice(0, 5)}</span>
+                            <span className="flex-1 truncate text-slate-700">{x.descricao}</span>
+                            <span className={`tabular-nums ${x.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>{fmt(x.valor)}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                    {p.ambiguos.length > 0 && (
+                      <div>
+                        <p className="text-[11px] font-semibold text-amber-700 uppercase mb-1">Dúvidas (revise)</p>
+                        {p.ambiguos.map((x) => (
+                          <label key={x.id} className="flex items-center gap-2 text-sm py-1" title={x.motivo}>
+                            <input type="checkbox" checked={concSel.has(x.id)} onChange={() => toggleConc(x.id)} />
+                            <span className="text-slate-500 w-12">{fmtData(x.data).slice(0, 5)}</span>
+                            <span className="flex-1 truncate text-slate-700">{x.descricao}</span>
+                            <span className={`tabular-nums ${x.tipo === 'credito' ? 'text-green-600' : 'text-red-600'}`}>{fmt(x.valor)}</span>
+                          </label>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            )}
+            <div className="flex justify-end gap-2 mt-5">
+              <button onClick={() => setConcModal(false)} className="text-sm text-slate-500 px-3 py-2">Fechar</button>
+              {concPares && concPares.length > 0 && (
+                <button onClick={aplicarConciliacao} disabled={busy || concSel.size === 0} className="bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">Remover {concSel.size} selecionada(s)</button>
+              )}
             </div>
           </div>
         </div>
