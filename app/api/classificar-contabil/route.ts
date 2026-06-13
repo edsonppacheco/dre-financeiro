@@ -24,14 +24,46 @@ export async function POST(req: NextRequest) {
 
     const chaves = Array.from(new Set(txs.map((t) => extrairChave(t.descricao))))
 
-    // Regras aprendidas de conta contábil (chave -> conta_contabil_id)
+    // Aprendizado direto do HISTÓRICO: aprende com lançamentos já atribuídos
+    // (em qualquer conta), escolhendo o valor mais frequente por contraparte.
+    const maisFrequente = (arr: string[]): string | null => {
+      const c: Record<string, number> = {}
+      for (const x of arr) c[x] = (c[x] ?? 0) + 1
+      let melhor: string | null = null, n = 0
+      for (const [k, v] of Object.entries(c)) if (v > n) { n = v; melhor = k }
+      return melhor
+    }
+    const histConta: Record<string, string> = {}
+    const histPessoa: Record<string, { cliente_id: string | null; fornecedor_id: string | null }> = {}
+    {
+      const { data: comConta } = await supabase
+        .from('transacoes').select('descricao, conta_contabil_id').not('conta_contabil_id', 'is', null)
+      const acc: Record<string, string[]> = {}
+      for (const t of comConta ?? []) (acc[extrairChave(t.descricao)] ??= []).push(t.conta_contabil_id as string)
+      for (const [k, v] of Object.entries(acc)) { const m = maisFrequente(v); if (m) histConta[k] = m }
+
+      const { data: comPessoa } = await supabase
+        .from('transacoes').select('descricao, cliente_id, fornecedor_id').or('cliente_id.not.is.null,fornecedor_id.not.is.null')
+      const accC: Record<string, string[]> = {}, accF: Record<string, string[]> = {}
+      for (const t of comPessoa ?? []) {
+        const k = extrairChave(t.descricao)
+        if (t.cliente_id) (accC[k] ??= []).push(t.cliente_id as string)
+        if (t.fornecedor_id) (accF[k] ??= []).push(t.fornecedor_id as string)
+      }
+      for (const k of new Set([...Object.keys(accC), ...Object.keys(accF)])) {
+        const c = accC[k] ? maisFrequente(accC[k]) : null
+        const f = accF[k] ? maisFrequente(accF[k]) : null
+        // cliente vence se for tão ou mais frequente que fornecedor
+        histPessoa[k] = (accC[k]?.length ?? 0) >= (accF[k]?.length ?? 0) ? { cliente_id: c, fornecedor_id: null } : { cliente_id: null, fornecedor_id: f }
+      }
+    }
+
+    // Regras aprendidas persistidas (complementam o histórico)
     const regras: Record<string, string> = {}
     try {
       const { data: rs } = await supabase.from('regras_classificacao').select('chave, conta_contabil_id').in('chave', chaves)
       for (const r of rs ?? []) regras[r.chave] = r.conta_contabil_id
     } catch { /* sem tabela */ }
-
-    // Regras aprendidas de pessoa (chave -> cliente/fornecedor)
     const regrasPessoa: Record<string, { cliente_id: string | null; fornecedor_id: string | null }> = {}
     try {
       const { data: rp } = await supabase.from('regras_pessoa').select('chave, cliente_id, fornecedor_id').in('chave', chaves)
@@ -47,20 +79,22 @@ export async function POST(req: NextRequest) {
 
     for (const t of txs) {
       const chave = extrairChave(t.descricao)
-      // conta contábil (só se ainda não tiver)
+      // conta contábil (só se ainda não tiver): histórico -> regra -> heurística -> IA
       if (!t.conta_contabil_id) {
-        if (regras[chave]) { setU(t.id, { conta_contabil_id: regras[chave] }); porRegra++ }
+        const doHist = histConta[chave]
+        if (doHist) { setU(t.id, { conta_contabil_id: doHist }); porRegra++ }
+        else if (regras[chave]) { setU(t.id, { conta_contabil_id: regras[chave] }); porRegra++ }
         else {
           const cod = heuristicaCodigo(t.descricao, t.tipo)
           if (cod && idPorCodigo[cod]) { setU(t.id, { conta_contabil_id: idPorCodigo[cod] }); porHeuristica++ }
           else paraIA.push({ id: t.id, descricao: t.descricao, valor: t.valor, tipo: t.tipo })
         }
       }
-      // cliente/fornecedor por aprendizado (só se ainda não tiver nenhum)
-      if (!t.cliente_id && !t.fornecedor_id && regrasPessoa[chave]) {
-        const rp = regrasPessoa[chave]
-        if (rp.cliente_id) { setU(t.id, { cliente_id: rp.cliente_id }); pessoas++ }
-        else if (rp.fornecedor_id) { setU(t.id, { fornecedor_id: rp.fornecedor_id }); pessoas++ }
+      // cliente/fornecedor por aprendizado (só se ainda não tiver nenhum): histórico -> regra
+      if (!t.cliente_id && !t.fornecedor_id) {
+        const rp = histPessoa[chave] ?? regrasPessoa[chave]
+        if (rp?.cliente_id) { setU(t.id, { cliente_id: rp.cliente_id }); pessoas++ }
+        else if (rp?.fornecedor_id) { setU(t.id, { fornecedor_id: rp.fornecedor_id }); pessoas++ }
       }
     }
 

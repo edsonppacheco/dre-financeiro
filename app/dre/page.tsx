@@ -1,12 +1,12 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useState } from 'react'
 
 type LinhaCalc = {
   codigo: string
   nome: string
   tipo: string
-  ordem: number
+  nivel: number
   valor: number
 }
 
@@ -24,6 +24,7 @@ export default function DrePage() {
   const [meses, setMeses] = useState<string[]>([])
   const [mes, setMes] = useState<string | null>(null)
   const [linhas, setLinhas] = useState<LinhaCalc[]>([])
+  const [lucroLiquido, setLucroLiquido] = useState(0)
   const [totalTx, setTotalTx] = useState(0)
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
@@ -37,6 +38,7 @@ export default function DrePage() {
         setMeses(d.meses)
         setMes(d.mes)
         setLinhas(d.linhas)
+        setLucroLiquido(d.lucroLiquido)
         setTotalTx(d.totalTransacoes)
       })
       .catch((e) => setErro(e.message))
@@ -47,13 +49,7 @@ export default function DrePage() {
     carregar()
   }, [])
 
-  const lucroLiquido = useMemo(
-    () => linhas.find((l) => l.codigo === '10')?.valor ?? null,
-    [linhas]
-  )
-
-  const fmt = (v: number) =>
-    v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 
   if (loading && !linhas.length) {
     return (
@@ -71,7 +67,7 @@ export default function DrePage() {
       <div className="mb-6 flex flex-wrap items-end justify-between gap-4">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">DRE — Demonstração do Resultado</h1>
-          <p className="text-slate-500 mt-1">Visualize e exporte a DRE por período</p>
+          <p className="text-slate-500 mt-1">Apurada pelo plano de contas, por período</p>
         </div>
         <div className="flex items-center gap-2">
           <select
@@ -106,25 +102,23 @@ export default function DrePage() {
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">
           <p className="text-4xl mb-3">📊</p>
           <p className="font-medium">Nenhum período disponível</p>
-          <p className="text-sm mt-1">Envie extratos na tela de upload para gerar a DRE</p>
+          <p className="text-sm mt-1">Classifique lançamentos no extrato (conta contábil) para gerar a DRE</p>
         </div>
       ) : (
         <>
           {/* Destaque Lucro Líquido */}
-          {lucroLiquido !== null && (
-            <div className="mb-5 bg-white rounded-xl border border-slate-200 p-5 flex items-center justify-between">
-              <div>
-                <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Lucro Líquido — {rotuloMes(mes)}</p>
-                <p className={`text-3xl font-bold mt-1 ${lucroLiquido >= 0 ? 'text-green-600' : 'text-red-600'}`}>
-                  {fmt(lucroLiquido)}
-                </p>
-              </div>
-              <div className="text-right text-xs text-slate-400">
-                <p>{totalTx} transação(ões)</p>
-                <p>classificadas no período</p>
-              </div>
+          <div className="mb-5 bg-white rounded-xl border border-slate-200 p-5 flex items-center justify-between">
+            <div>
+              <p className="text-xs font-medium text-slate-500 uppercase tracking-wide">Lucro Líquido — {rotuloMes(mes)}</p>
+              <p className={`text-3xl font-bold mt-1 ${lucroLiquido >= 0 ? 'text-green-600' : 'text-red-600'}`}>
+                {fmt(lucroLiquido)}
+              </p>
             </div>
-          )}
+            <div className="text-right text-xs text-slate-400">
+              <p>{totalTx} lançamento(s)</p>
+              <p>classificados no período</p>
+            </div>
+          </div>
 
           {/* Tabela DRE */}
           <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
@@ -132,39 +126,38 @@ export default function DrePage() {
               <thead>
                 <tr className="border-b border-slate-200 text-left text-xs text-slate-500 uppercase tracking-wide">
                   <th className="px-4 py-3 font-medium w-16">Cód.</th>
-                  <th className="px-4 py-3 font-medium">Descrição</th>
+                  <th className="px-4 py-3 font-medium">Conta</th>
                   <th className="px-4 py-3 font-medium text-right">Valor</th>
                 </tr>
               </thead>
               <tbody>
                 {linhas.map((l) => {
                   const isGrupo = l.tipo === 'grupo'
-                  const isResultado = l.tipo === 'resultado'
-                  const isFolha = !isGrupo && !isResultado
                   const negativo = l.valor < 0
-
-                  let rowCls = ''
-                  if (isGrupo) rowCls = 'bg-slate-50 font-semibold text-slate-700'
-                  else if (isResultado) rowCls = 'bg-blue-50/60 font-bold text-slate-800 border-y border-blue-100'
-                  else rowCls = 'text-slate-600'
-
+                  const rowCls = isGrupo ? 'bg-slate-50 font-semibold text-slate-700' : 'text-slate-600'
                   return (
                     <tr key={l.codigo} className={`border-b border-slate-100 ${rowCls}`}>
                       <td className="px-4 py-2.5 text-xs text-slate-400 tabular-nums">{l.codigo}</td>
-                      <td className={`px-4 py-2.5 ${isFolha ? 'pl-8 text-slate-600' : ''}`}>{l.nome}</td>
-                      <td className={`px-4 py-2.5 text-right tabular-nums ${negativo ? 'text-red-600' : isResultado || isGrupo ? '' : 'text-slate-700'}`}>
-                        {l.valor === 0 && isFolha ? <span className="text-slate-300">—</span> : fmt(l.valor)}
+                      <td className={`px-4 py-2.5 ${l.nivel === 1 ? 'pl-8' : ''}`}>{l.nome}</td>
+                      <td className={`px-4 py-2.5 text-right tabular-nums ${negativo ? 'text-red-600' : l.valor > 0 ? 'text-green-600' : 'text-slate-300'}`}>
+                        {l.valor === 0 ? '—' : fmt(l.valor)}
                       </td>
                     </tr>
                   )
                 })}
+                {/* Lucro líquido */}
+                <tr className="bg-blue-50/60 font-bold text-slate-800 border-t-2 border-blue-100">
+                  <td className="px-4 py-3"></td>
+                  <td className="px-4 py-3">Lucro Líquido</td>
+                  <td className={`px-4 py-3 text-right tabular-nums ${lucroLiquido < 0 ? 'text-red-600' : 'text-green-700'}`}>{fmt(lucroLiquido)}</td>
+                </tr>
               </tbody>
             </table>
           </div>
 
           <p className="text-xs text-slate-400 mt-3">
-            Os subtotais (Receita Líquida, Lucro Bruto, Resultado antes do IR, Lucro Líquido) são calculados
-            automaticamente a partir das classificações. Correções feitas na tela de revisão já são refletidas aqui.
+            A DRE soma os lançamentos pela conta contábil atribuída no extrato, usando a data real de cada lançamento.
+            Receitas entram positivas; impostos e despesas, negativas.
           </p>
         </>
       )}

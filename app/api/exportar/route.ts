@@ -1,7 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ExcelJS from 'exceljs'
 import { createSupabaseAdminClient } from '@/lib/supabase'
-import { calcularDre, type ItemClassificado, type LinhaDreBase } from '@/lib/dre'
+import { calcularDrePlano, type PlanoLinha } from '@/lib/dre-plano'
+
+const ultimoDiaMes = (mes: string) => {
+  const [a, m] = mes.split('-').map(Number)
+  return `${mes}-${String(new Date(a, m, 0).getDate()).padStart(2, '0')}`
+}
 
 export async function GET(req: NextRequest) {
   try {
@@ -11,22 +16,25 @@ export async function GET(req: NextRequest) {
 
     const supabase = createSupabaseAdminClient()
 
-    const { data: linhasRaw } = await supabase.from('linhas_dre').select('codigo, nome, tipo, ordem').order('ordem')
-    if (!linhasRaw?.length) return NextResponse.json({ error: 'Nenhuma linha DRE' }, { status: 400 })
-    const linhasBase = linhasRaw as LinhaDreBase[]
+    const { data: planoRaw } = await supabase.from('plano_contas').select('id, codigo, nome, tipo, pai_id, ordem').order('ordem')
+    if (!planoRaw?.length) return NextResponse.json({ error: 'Nenhum plano de contas' }, { status: 400 })
+    const plano = planoRaw as PlanoLinha[]
 
-    // Agrega valores por linha DRE no mês (respeitando correções)
-    const { data: agregado } = await supabase
-      .from('classificacoes')
-      .select('linha_dre, corrigido_para, transacoes!inner(valor, tipo, extratos!inner(mes_referencia))')
-      .eq('transacoes.extratos.mes_referencia', `${mes}-01`)
+    // Soma (com sinal) por conta contábil no mês, pela data da transação
+    const { data: txs } = await supabase
+      .from('transacoes')
+      .select('valor, tipo, conta_contabil_id')
+      .not('conta_contabil_id', 'is', null)
+      .gte('data', `${mes}-01`)
+      .lte('data', ultimoDiaMes(mes))
 
-    const itens: ItemClassificado[] = (agregado ?? [])
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .map((c: any) => (c.transacoes ? { linha_dre: c.linha_dre, corrigido_para: c.corrigido_para, valor: c.transacoes.valor, tipo: c.transacoes.tipo } : null))
-      .filter((x): x is ItemClassificado => x !== null)
+    const somaPorConta: Record<string, number> = {}
+    for (const t of txs ?? []) {
+      const v = t.tipo === 'credito' ? Number(t.valor) : -Number(t.valor)
+      somaPorConta[t.conta_contabil_id as string] = (somaPorConta[t.conta_contabil_id as string] ?? 0) + v
+    }
 
-    const linhas = calcularDre(linhasBase, itens)
+    const { linhas, lucroLiquido } = calcularDrePlano(plano, somaPorConta)
 
     // Gera Excel
     const workbook = new ExcelJS.Workbook()
@@ -56,22 +64,20 @@ export async function GET(req: NextRequest) {
 
     for (const linha of linhas) {
       const isGrupo = linha.tipo === 'grupo'
-      const isResultado = linha.tipo === 'resultado'
-      const valor = linha.valor
-
-      const row = sheet.addRow([linha.codigo, linha.nome, valor])
+      const row = sheet.addRow([linha.codigo, linha.nome, linha.valor])
 
       if (isGrupo) {
         row.font = { bold: true, size: 11 }
         row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFE8EDF2' } }
-      } else if (isResultado) {
-        row.font = { bold: true, color: { argb: valor && valor >= 0 ? 'FF1A6B3A' : 'FFB91C1C' } }
-        row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } }
       }
-
-      const valorCell = row.getCell(3)
-      valorCell.numFmt = 'R$ #,##0.00;[Red](R$ #,##0.00)'
+      row.getCell(3).numFmt = 'R$ #,##0.00;[Red](R$ #,##0.00)'
     }
+
+    // Lucro líquido
+    const totalRow = sheet.addRow(['', 'Lucro Líquido', lucroLiquido])
+    totalRow.font = { bold: true, color: { argb: lucroLiquido >= 0 ? 'FF1A6B3A' : 'FFB91C1C' } }
+    totalRow.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFDBEAFE' } }
+    totalRow.getCell(3).numFmt = 'R$ #,##0.00;[Red](R$ #,##0.00)'
 
     // Bordas na tabela
     sheet.eachRow((row, rowNum) => {

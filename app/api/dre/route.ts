@@ -1,59 +1,53 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase'
-import { calcularDre, type ItemClassificado, type LinhaDreBase } from '@/lib/dre'
+import { calcularDrePlano, type PlanoLinha } from '@/lib/dre-plano'
+
+const ultimoDiaMes = (mes: string) => {
+  const [a, m] = mes.split('-').map(Number)
+  return `${mes}-${String(new Date(a, m, 0).getDate()).padStart(2, '0')}`
+}
 
 export async function GET(req: NextRequest) {
   try {
     const supabase = createSupabaseAdminClient()
 
-    // Meses disponíveis (distintos), mais recente primeiro
-    const { data: extratos } = await supabase
-      .from('extratos')
-      .select('mes_referencia')
-      .order('mes_referencia', { ascending: false })
+    // Meses disponíveis a partir da DATA real das transações classificadas
+    const { data: datas } = await supabase
+      .from('transacoes')
+      .select('data')
+      .not('conta_contabil_id', 'is', null)
+    const meses = Array.from(new Set((datas ?? []).map((d) => (d.data as string).slice(0, 7)))).sort().reverse()
 
-    const meses = Array.from(
-      new Set((extratos ?? []).map((e) => (e.mes_referencia as string).slice(0, 7)))
-    )
-
-    // Mês solicitado, ou o mais recente disponível
     const { searchParams } = new URL(req.url)
     const mes = searchParams.get('mes') ?? meses[0] ?? null
 
-    const { data: linhasRaw } = await supabase
-      .from('linhas_dre')
-      .select('codigo, nome, tipo, ordem')
+    const { data: planoRaw } = await supabase
+      .from('plano_contas')
+      .select('id, codigo, nome, tipo, pai_id, ordem')
       .order('ordem')
-    const linhas = (linhasRaw ?? []) as LinhaDreBase[]
+    const plano = (planoRaw ?? []) as PlanoLinha[]
 
     if (!mes) {
-      return NextResponse.json({ meses, mes: null, linhas: [], totalTransacoes: 0 })
+      return NextResponse.json({ meses, mes: null, linhas: [], lucroLiquido: 0, totalTransacoes: 0 })
     }
 
-    const { data: agregado } = await supabase
-      .from('classificacoes')
-      .select('linha_dre, corrigido_para, transacoes!inner(valor, tipo, extratos!inner(mes_referencia))')
-      .eq('transacoes.extratos.mes_referencia', `${mes}-01`)
+    // Soma (com sinal) por conta contábil no mês, pela data da transação
+    const { data: txs } = await supabase
+      .from('transacoes')
+      .select('valor, tipo, conta_contabil_id')
+      .not('conta_contabil_id', 'is', null)
+      .gte('data', `${mes}-01`)
+      .lte('data', ultimoDiaMes(mes))
 
-    const itens: ItemClassificado[] = (agregado ?? [])
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      .map((c: any) => {
-        const tx = c.transacoes
-        if (!tx) return null
-        return {
-          linha_dre: c.linha_dre,
-          corrigido_para: c.corrigido_para,
-          valor: tx.valor,
-          tipo: tx.tipo,
-        }
-      })
-      .filter((x): x is ItemClassificado => x !== null)
+    const somaPorConta: Record<string, number> = {}
+    for (const t of txs ?? []) {
+      const v = t.tipo === 'credito' ? Number(t.valor) : -Number(t.valor)
+      somaPorConta[t.conta_contabil_id as string] = (somaPorConta[t.conta_contabil_id as string] ?? 0) + v
+    }
 
-    const calculadas = calcularDre(linhas, itens)
-
-    return NextResponse.json({ meses, mes, linhas: calculadas, totalTransacoes: itens.length })
+    const { linhas, lucroLiquido } = calcularDrePlano(plano, somaPorConta)
+    return NextResponse.json({ meses, mes, linhas, lucroLiquido, totalTransacoes: (txs ?? []).length })
   } catch (err: unknown) {
-    const message = err instanceof Error ? err.message : 'Erro interno'
-    return NextResponse.json({ error: message }, { status: 500 })
+    return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
   }
 }
