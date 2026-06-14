@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     const todasDatas = (datas ?? []).map((d) => d.data as string)
     const anos = Array.from(new Set(todasDatas.map((d) => Number(d.slice(0, 4))))).sort((a, b) => b - a)
     const ano = Number(searchParams.get('ano')) || anos[0] || new Date().getFullYear()
-    const visao = (searchParams.get('visao') ?? 'meses') as 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes'
+    const visao = (searchParams.get('visao') ?? 'meses') as 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes' | 'anos'
 
     // Meses/trimestres do ano que têm dados (para não mostrar colunas vazias)
     const mesesComDados = new Set(todasDatas.filter((d) => d.startsWith(`${ano}-`)).map((d) => Number(d.slice(5, 7))))
@@ -28,22 +28,27 @@ export async function GET(req: NextRequest) {
     const colTrim = (q: number): Coluna => { const mi = (q - 1) * 3 + 1, mf = q * 3; return { chave: `${ano}-T${q}`, label: `T${q}`, inicio: `${ano}-${String(mi).padStart(2, '0')}-01`, fim: `${ano}-${String(mf).padStart(2, '0')}-${ultimoDia(ano, mf)}` } }
 
     let colunas: Coluna[] = []
-    if (visao === 'ano') colunas = [{ chave: `${ano}`, label: `${ano}`, inicio: `${ano}-01-01`, fim: `${ano}-12-31` }]
+    if (visao === 'anos') colunas = anos.slice(0, 5).reverse().map((a) => ({ chave: `${a}`, label: `${a}`, inicio: `${a}-01-01`, fim: `${a}-12-31` }))
+    else if (visao === 'ano') colunas = [{ chave: `${ano}`, label: `${ano}`, inicio: `${ano}-01-01`, fim: `${ano}-12-31` }]
     else if (visao === 'trimestres') colunas = [1, 2, 3, 4].filter((q) => trimComDados.has(q)).map(colTrim)
     else if (visao === 'trimestre') { const q = Number(searchParams.get('trimestre')) || 1; colunas = [colTrim(q)] }
     else if (visao === 'mes') { const m = Number(searchParams.get('mes')) || 1; colunas = [colMes(m)] }
     else colunas = Array.from({ length: 12 }, (_, i) => i + 1).filter((m) => mesesComDados.has(m)).map(colMes)
 
+    // Intervalo de datas coberto pelas colunas (suporta plurianual)
+    const rangeIni = colunas[0]?.inicio ?? `${ano}-01-01`
+    const rangeFim = colunas[colunas.length - 1]?.fim ?? `${ano}-12-31`
+
     const { data: planoRaw } = await supabase.from('plano_contas').select('id, codigo, nome, tipo, pai_id, ordem').order('ordem')
     const plano = (planoRaw ?? []) as PlanoLinha[]
 
-    // Busca transações do ano de uma vez
+    // Busca transações do intervalo de uma vez
     const { data: txs } = await supabase
       .from('transacoes')
       .select('data, valor, tipo, conta_contabil_id')
       .not('conta_contabil_id', 'is', null)
-      .gte('data', `${ano}-01-01`)
-      .lte('data', `${ano}-12-31`)
+      .gte('data', rangeIni)
+      .lte('data', rangeFim)
 
     // Soma por conta, por coluna
     const somasPorColuna: Record<string, Record<string, number>> = {}
@@ -72,7 +77,7 @@ export async function GET(req: NextRequest) {
     const { data: txAll } = await supabase
       .from('transacoes')
       .select('conta_id, data, valor, tipo, conta_contabil_id')
-      .lte('data', `${ano}-12-31`)
+      .lte('data', rangeFim)
 
     const distribIds = new Set(plano.filter((p) => p.tipo === 'distribuicao').map((p) => p.id))
     const ehDistrib = (contaContabilId: string | null) => !!contaContabilId && distribIds.has(contaContabilId)
@@ -81,7 +86,7 @@ export async function GET(req: NextRequest) {
     const { data: transfs } = await supabase
       .from('transferencias')
       .select('conta_origem_id, conta_destino_id, data, valor')
-      .gte('data', `${ano}-01-01`).lte('data', `${ano}-12-31`)
+      .gte('data', rangeIni).lte('data', rangeFim)
 
     // Capital inicial = patrimônio de abertura (soma dos saldos iniciais de todas as contas)
     const capitalInicial = round((contasRaw ?? []).reduce((s, c) => s + Number(c.saldo_inicial ?? 0), 0))

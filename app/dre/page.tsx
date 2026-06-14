@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 
 type Coluna = { chave: string; label: string }
 type LinhaCalc = { codigo: string; nome: string; tipo: string; nivel: number; valores: Record<string, number> }
-type Visao = 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes'
+type Visao = 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes' | 'anos'
 type BalancoCol = { contasCorrentes: number; cartoes: number; emprestimos: number; capitalInicial: number; lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number; totalAtivos: number; totalPassivosPL: number }
 type SerieCol = { distribuicaoMes: number; recebimentoEmprestimos: number; pagamentoEmprestimos: number }
 
@@ -105,7 +105,7 @@ export default function RelatoriosPage() {
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
-        <select value={ano ?? ''} onChange={(e) => recarregar({ ano: Number(e.target.value) })} disabled={!anos.length} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-500">
+        <select value={ano ?? ''} onChange={(e) => recarregar({ ano: Number(e.target.value) })} disabled={!anos.length || visao === 'anos'} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-500 disabled:opacity-50">
           {anos.length === 0 && <option value="">—</option>}
           {anos.map((a) => <option key={a} value={a}>{a}</option>)}
         </select>
@@ -115,6 +115,7 @@ export default function RelatoriosPage() {
           <option value="meses">Mês a mês</option>
           <option value="trimestre">Um trimestre…</option>
           <option value="mes">Um mês…</option>
+          <option value="anos">Plurianual (até 5 anos)</option>
         </select>
         {visao === 'trimestre' && (
           <select value={trimestre} onChange={(e) => recarregar({ trimestre: Number(e.target.value) })} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white">

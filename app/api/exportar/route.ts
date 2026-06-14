@@ -16,7 +16,7 @@ export async function GET(req: NextRequest) {
     const todasDatas = (datas ?? []).map((d) => d.data as string)
     const anos = Array.from(new Set(todasDatas.map((d) => Number(d.slice(0, 4))))).sort((a, b) => b - a)
     const ano = Number(searchParams.get('ano')) || anos[0] || new Date().getFullYear()
-    const visao = (searchParams.get('visao') ?? 'meses') as 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes'
+    const visao = (searchParams.get('visao') ?? 'meses') as 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes' | 'anos'
 
     const mesesComDados = new Set(todasDatas.filter((d) => d.startsWith(`${ano}-`)).map((d) => Number(d.slice(5, 7))))
     const trimComDados = new Set(Array.from(mesesComDados).map((m) => Math.ceil(m / 3)))
@@ -24,7 +24,8 @@ export async function GET(req: NextRequest) {
     const colTrim = (q: number): Coluna => { const mi = (q - 1) * 3 + 1, mf = q * 3; return { chave: `${ano}-T${q}`, label: `T${q}`, inicio: `${ano}-${String(mi).padStart(2, '0')}-01`, fim: `${ano}-${String(mf).padStart(2, '0')}-${ultimoDia(ano, mf)}` } }
 
     let colunas: Coluna[] = []
-    if (visao === 'ano') colunas = [{ chave: `${ano}`, label: `${ano}`, inicio: `${ano}-01-01`, fim: `${ano}-12-31` }]
+    if (visao === 'anos') colunas = anos.slice(0, 5).reverse().map((a) => ({ chave: `${a}`, label: `${a}`, inicio: `${a}-01-01`, fim: `${a}-12-31` }))
+    else if (visao === 'ano') colunas = [{ chave: `${ano}`, label: `${ano}`, inicio: `${ano}-01-01`, fim: `${ano}-12-31` }]
     else if (visao === 'trimestres') colunas = [1, 2, 3, 4].filter((q) => trimComDados.has(q)).map(colTrim)
     else if (visao === 'trimestre') colunas = [colTrim(Number(searchParams.get('trimestre')) || 1)]
     else if (visao === 'mes') colunas = [colMes(Number(searchParams.get('mes')) || 1)]
@@ -33,8 +34,10 @@ export async function GET(req: NextRequest) {
     const { data: planoRaw } = await supabase.from('plano_contas').select('id, codigo, nome, tipo, pai_id, ordem').order('ordem')
     const plano = (planoRaw ?? []) as PlanoLinha[]
 
+    const rangeIni = colunas[0]?.inicio ?? `${ano}-01-01`
+    const rangeFim = colunas[colunas.length - 1]?.fim ?? `${ano}-12-31`
     const { data: txs } = await supabase.from('transacoes').select('data, valor, tipo, conta_contabil_id')
-      .not('conta_contabil_id', 'is', null).gte('data', `${ano}-01-01`).lte('data', `${ano}-12-31`)
+      .not('conta_contabil_id', 'is', null).gte('data', rangeIni).lte('data', rangeFim)
 
     const somasPorColuna: Record<string, Record<string, number>> = {}
     for (const col of colunas) somasPorColuna[col.chave] = {}
