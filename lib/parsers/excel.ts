@@ -7,6 +7,27 @@ export type TransacaoParsed = {
   tipo: 'credito' | 'debito'
 }
 
+// Converte a planilha em texto (uma linha por linha, células separadas por " | ")
+// para passar pelo mesmo pipeline de IA + solver do PDF.
+export async function excelParaTexto(buffer: ArrayBuffer): Promise<string> {
+  const workbook = new ExcelJS.Workbook()
+  await workbook.xlsx.load(buffer)
+  const linhas: string[] = []
+  for (const ws of workbook.worksheets) {
+    ws.eachRow((row) => {
+      const valores = (row.values as unknown[]).slice(1).map((c) => {
+        if (c == null) return ''
+        if (c instanceof Date) return c.toISOString().split('T')[0]
+        if (typeof c === 'object' && 'text' in (c as object)) return String((c as { text: unknown }).text ?? '')
+        if (typeof c === 'object' && 'result' in (c as object)) return String((c as { result: unknown }).result ?? '')
+        return String(c)
+      })
+      if (valores.some((v) => v.trim())) linhas.push(valores.join(' | '))
+    })
+  }
+  return linhas.join('\n')
+}
+
 export async function parseExcel(buffer: ArrayBuffer): Promise<TransacaoParsed[]> {
   const workbook = new ExcelJS.Workbook()
   await workbook.xlsx.load(buffer)

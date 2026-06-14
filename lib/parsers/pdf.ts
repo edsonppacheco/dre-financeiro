@@ -49,11 +49,10 @@ function dividirEmChunks(texto: string, maxChars = 7000): string[] {
   return chunks.length ? chunks : [texto]
 }
 
-export async function parsePDF(buffer: ArrayBuffer): Promise<ExtratoPDFResult> {
-  const texto = await extrairTexto(buffer)
-  if (!texto?.trim()) throw new Error('Não foi possível extrair texto do PDF')
-
-  // Extrai os pedaços em paralelo (chamadas menores e rápidas) e junta.
+// Núcleo compartilhado (PDF e Excel): texto -> transações + saldos via IA +
+// solver determinístico de sinais. Divide em pedaços para extratos grandes.
+export async function parseTextoExtrato(texto: string): Promise<ExtratoPDFResult> {
+  if (!texto?.trim()) throw new Error('Não foi possível extrair texto do arquivo')
   const chunks = dividirEmChunks(texto)
   const resultados = await Promise.all(chunks.map((c) => extrairExtratoPDF(c)))
   const saldoInicial = resultados[0]?.saldo_inicial ?? 0
@@ -66,8 +65,11 @@ export async function parsePDF(buffer: ArrayBuffer): Promise<ExtratoPDFResult> {
     for (const s of extraido.saldos_dia) saldosPorData[s.data] = Number(s.saldo) // dedup por data
   }
   const saldosDia = Object.entries(saldosPorData).map(([data, saldo]) => ({ data, saldo })).sort((a, b) => (a.data < b.data ? -1 : 1))
-
   const { transacoes, diasNaoResolvidos } = resolverSinais(saldoInicial, tx, saldosDia)
-
   return { transacoes, saldoInicial, saldosDia, diasNaoResolvidos }
+}
+
+export async function parsePDF(buffer: ArrayBuffer): Promise<ExtratoPDFResult> {
+  const texto = await extrairTexto(buffer)
+  return parseTextoExtrato(texto)
 }

@@ -1,8 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { put } from '@vercel/blob'
 import { createSupabaseAdminClient } from '@/lib/supabase'
-import { parseExcel } from '@/lib/parsers/excel'
-import { parsePDF } from '@/lib/parsers/pdf'
+import { excelParaTexto } from '@/lib/parsers/excel'
+import { parsePDF, parseTextoExtrato } from '@/lib/parsers/pdf'
 
 // Extração por IA de extratos grandes pode demorar; amplia o limite de duração.
 export const maxDuration = 300
@@ -57,7 +57,10 @@ export async function POST(req: NextRequest) {
           saldoInicial = r.saldoInicial
           saldosDia = r.saldosDia
         } else if (['xlsx', 'xls'].includes(ext ?? '')) {
-          transacoes = await parseExcel(buffer)
+          const r = await parseTextoExtrato(await excelParaTexto(buffer))
+          transacoes = r.transacoes
+          saldoInicial = r.saldoInicial
+          saldosDia = r.saldosDia
         } else {
           throw new Error('Formato não suportado. Use PDF ou Excel.')
         }
