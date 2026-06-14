@@ -42,6 +42,7 @@ export default function ConfiguracoesPage() {
   const [editId, setEditId] = useState<string | null>(null)
   const [editNome, setEditNome] = useState('')
   const [editTipo, setEditTipo] = useState('')
+  const [editPai, setEditPai] = useState('')
 
   const carregar = () => {
     fetch('/api/plano-contas')
@@ -103,6 +104,7 @@ export default function ConfiguracoesPage() {
     setEditId(c.id)
     setEditNome(c.nome)
     setEditTipo(c.tipo)
+    setEditPai(c.pai_id ?? '')
   }
 
   const salvarEdicao = async () => {
@@ -113,7 +115,7 @@ export default function ConfiguracoesPage() {
       const res = await fetch('/api/plano-contas', {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ id: editId, nome: editNome, tipo: editTipo }),
+        body: JSON.stringify({ id: editId, nome: editNome, tipo: editTipo, pai_id: editPai || null }),
       })
       const d = await res.json()
       if (d.error) throw new Error(d.error)
@@ -146,13 +148,13 @@ export default function ConfiguracoesPage() {
     }
   }
 
-  // Reposiciona uma conta raiz, trocando a ordem com a vizinha
-  const moverRaiz = async (c: PlanoConta, dir: -1 | 1) => {
-    const raizes = contas.filter((x) => !x.pai_id).sort((a, b) => a.ordem - b.ordem)
-    const i = raizes.findIndex((x) => x.id === c.id)
+  // Reposiciona uma conta trocando a ordem com a irmã vizinha (mesmo pai)
+  const mover = async (c: PlanoConta, dir: -1 | 1) => {
+    const irmaos = contas.filter((x) => (x.pai_id ?? null) === (c.pai_id ?? null)).sort((a, b) => a.ordem - b.ordem)
+    const i = irmaos.findIndex((x) => x.id === c.id)
     const j = i + dir
-    if (i < 0 || j < 0 || j >= raizes.length) return
-    const a = raizes[i], b = raizes[j]
+    if (i < 0 || j < 0 || j >= irmaos.length) return
+    const a = irmaos[i], b = irmaos[j]
     setBusy(true); setErro(null)
     try {
       await Promise.all([
@@ -163,7 +165,9 @@ export default function ConfiguracoesPage() {
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro ao reposicionar') } finally { setBusy(false) }
   }
 
-  const raizesOrdenadas = contas.filter((c) => !c.pai_id).sort((a, b) => a.ordem - b.ordem)
+  // primeiro/último entre os irmãos (para desabilitar ↑/↓)
+  const irmaosDe = (c: PlanoConta) => contas.filter((x) => (x.pai_id ?? null) === (c.pai_id ?? null)).sort((a, b) => a.ordem - b.ordem)
+  const grupos = contas.filter((c) => c.tipo === 'grupo')
 
   return (
     <div className="max-w-3xl mx-auto">
@@ -233,6 +237,10 @@ export default function ConfiguracoesPage() {
                   <select value={editTipo} onChange={(e) => setEditTipo(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1 text-xs">
                     {TIPOS.map((t) => <option key={t.value} value={t.value}>{t.label}</option>)}
                   </select>
+                  <select value={editPai} onChange={(e) => setEditPai(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1 text-xs" title="Grupo">
+                    <option value="">— Raiz —</option>
+                    {grupos.filter((g) => g.id !== editId).map((g) => <option key={g.id} value={g.id}>{g.nome}</option>)}
+                  </select>
                   <button onClick={salvarEdicao} disabled={busy} className="text-xs text-green-600 font-medium hover:underline disabled:opacity-50">Salvar</button>
                   <button onClick={() => setEditId(null)} className="text-xs text-slate-400 hover:underline">Cancelar</button>
                 </>
@@ -242,12 +250,8 @@ export default function ConfiguracoesPage() {
                   <span className={`text-[11px] font-medium px-2 py-0.5 rounded-full ${tipoCor[conta.tipo] ?? 'bg-slate-100 text-slate-500'}`}>
                     {TIPOS.find((t) => t.value === conta.tipo)?.label ?? conta.tipo}
                   </span>
-                  {nivel === 0 && (
-                    <>
-                      <button onClick={() => moverRaiz(conta, -1)} disabled={busy || raizesOrdenadas[0]?.id === conta.id} className="text-slate-400 hover:text-slate-700 text-sm disabled:opacity-30" title="Mover para cima">↑</button>
-                      <button onClick={() => moverRaiz(conta, 1)} disabled={busy || raizesOrdenadas[raizesOrdenadas.length - 1]?.id === conta.id} className="text-slate-400 hover:text-slate-700 text-sm disabled:opacity-30" title="Mover para baixo">↓</button>
-                    </>
-                  )}
+                  <button onClick={() => mover(conta, -1)} disabled={busy || irmaosDe(conta)[0]?.id === conta.id} className="text-slate-400 hover:text-slate-700 text-sm disabled:opacity-30" title="Mover para cima">↑</button>
+                  <button onClick={() => mover(conta, 1)} disabled={busy || irmaosDe(conta).slice(-1)[0]?.id === conta.id} className="text-slate-400 hover:text-slate-700 text-sm disabled:opacity-30" title="Mover para baixo">↓</button>
                   <button onClick={() => iniciarEdicao(conta)} className="text-slate-400 hover:text-slate-700 text-sm" title="Editar">✎</button>
                   <button onClick={() => remover(conta)} className="text-slate-400 hover:text-red-500 text-sm" title="Excluir">🗑</button>
                 </>

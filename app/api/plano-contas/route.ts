@@ -63,7 +63,7 @@ export async function POST(req: NextRequest) {
 
 export async function PATCH(req: NextRequest) {
   try {
-    const { id, nome, tipo, ordem } = await req.json()
+    const { id, nome, tipo, ordem, pai_id } = await req.json()
     if (!id) return NextResponse.json({ error: 'id obrigatório' }, { status: 400 })
     const update: Record<string, unknown> = {}
     if (nome !== undefined) {
@@ -75,6 +75,7 @@ export async function PATCH(req: NextRequest) {
       update.tipo = tipo
     }
     if (ordem !== undefined) update.ordem = Number(ordem)
+    if (pai_id !== undefined) update.pai_id = pai_id || null
     if (!Object.keys(update).length) return NextResponse.json({ error: 'nada para atualizar' }, { status: 400 })
 
     const supabase = createSupabaseAdminClient()

@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import { Inter } from 'next/font/google'
-import Link from 'next/link'
 import './globals.css'
+import SideNav from './_components/SideNav'
 
 const inter = Inter({ subsets: ['latin'] })
 
@@ -10,36 +10,16 @@ export const metadata: Metadata = {
   description: 'Classificação financeira inteligente com IA',
 }
 
-const navLinks = [
-  { href: '/', label: 'Upload' },
-  { href: '/contas', label: 'Contas' },
-  { href: '/dre', label: 'DRE' },
-  { href: '/clientes', label: 'Clientes' },
-  { href: '/fornecedores', label: 'Fornecedores' },
-  { href: '/configuracoes', label: 'Configurações' },
-]
-
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
     <html lang="pt-BR">
       <body className={`${inter.className} bg-gray-50 min-h-screen`}>
-        <nav className="bg-slate-800 text-white">
-          <div className="max-w-7xl mx-auto px-4 h-14 flex items-center gap-6">
-            <span className="font-bold text-lg tracking-tight">DRE Financeiro</span>
-            <div className="flex gap-1 ml-4">
-              {navLinks.map((link) => (
-                <Link
-                  key={link.href}
-                  href={link.href}
-                  className="px-3 py-1.5 rounded text-sm font-medium text-slate-300 hover:text-white hover:bg-slate-700 transition-colors"
-                >
-                  {link.label}
-                </Link>
-              ))}
-            </div>
-          </div>
-        </nav>
-        <main className="max-w-7xl mx-auto px-4 py-8">{children}</main>
+        <div className="flex min-h-screen">
+          <main className="flex-1 min-w-0 px-4 py-8">
+            <div className="max-w-7xl mx-auto">{children}</div>
+          </main>
+          <SideNav />
+        </div>
       </body>
     </html>
   )
