@@ -19,6 +19,7 @@ type Lancamento = {
   saldo_calculado: number
   transferencia_id: string | null
   transferencia_contraparte: string | null
+  confianca: number | null
 }
 type ExtratoResp = {
   conta: Conta
@@ -141,6 +142,8 @@ export default function ContasExtratoPage() {
     setBusy(true)
     try { await fetch(`/api/extrato?id=${l.id}`, { method: 'DELETE' }); carregar(contaId, mes) } finally { setBusy(false) }
   }
+  // confirma a sugestão automática (some o índice de confiança)
+  const confirmarSugestao = (l: Lancamento) => patch({ id: l.id, confirmar: true })
 
   // conciliação de extratos sobrepostos
   type ConcItem = { id: string; data: string; valor: number; tipo: string; descricao: string; motivo?: string }
@@ -276,8 +279,8 @@ export default function ContasExtratoPage() {
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-hidden">
           {/* cabeçalho */}
-          <div className="grid grid-cols-[1fr_150px_180px_130px_40px] gap-2 px-4 py-2.5 border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide font-medium">
-            <span>Descrição</span><span>Cliente / Fornecedor</span><span>Conta contábil</span><span className="text-right">Valor</span><span></span>
+          <div className="grid grid-cols-[1fr_140px_160px_120px_52px_34px] gap-2 px-4 py-2.5 border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide font-medium">
+            <span>Descrição</span><span>Cliente / Fornecedor</span><span>Conta contábil</span><span className="text-right">Valor</span><span className="text-center" title="Confiança da sugestão">Conf.</span><span></span>
           </div>
 
           {dias.map(({ data, lancs }) => {
@@ -289,7 +292,7 @@ export default function ContasExtratoPage() {
                 {/* sub-cabeçalho do dia */}
                 <div className="bg-slate-50 px-4 py-1.5 text-xs font-semibold text-slate-500 border-b border-slate-100">{fmtData(data)}</div>
                 {lancs.map((l) => (
-                  <div key={l.id} className="grid grid-cols-[1fr_150px_180px_130px_40px] gap-2 px-4 py-2 items-center border-b border-slate-50 hover:bg-slate-50/50">
+                  <div key={l.id} className="grid grid-cols-[1fr_140px_160px_120px_52px_34px] gap-2 px-4 py-2 items-center border-b border-slate-50 hover:bg-slate-50/50">
                     <div className="text-sm text-slate-700 truncate" title={l.descricao}>
                       {l.descricao}{l.manual && <span className="ml-1 text-[10px] text-slate-400">(manual)</span>}
                     </div>
@@ -328,6 +331,22 @@ export default function ContasExtratoPage() {
                         <option value="credito">C</option>
                         <option value="debito">D</option>
                       </select>
+                    </div>
+                    <div className="flex justify-center">
+                      {l.confianca != null && !l.transferencia_id ? (
+                        <button
+                          onClick={() => confirmarSugestao(l)}
+                          disabled={busy}
+                          title={`Sugestão automática (${Math.round(l.confianca * 100)}% de confiança). Clique para confirmar.`}
+                          className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-full hover:ring-2 hover:ring-offset-1 ${
+                            l.confianca >= 0.85 ? 'bg-green-100 text-green-700 hover:ring-green-300'
+                            : l.confianca >= 0.6 ? 'bg-amber-100 text-amber-700 hover:ring-amber-300'
+                            : 'bg-red-100 text-red-700 hover:ring-red-300'
+                          }`}
+                        >
+                          {Math.round(l.confianca * 100)}%
+                        </button>
+                      ) : null}
                     </div>
                     <button onClick={() => remover(l)} disabled={busy} className="text-slate-300 hover:text-red-500 text-sm text-right">🗑</button>
                   </div>

@@ -77,6 +77,10 @@ export async function PATCH(req: NextRequest) {
     if (body.cliente_id !== undefined) update.cliente_id = body.cliente_id || null
     if (body.fornecedor_id !== undefined) update.fornecedor_id = body.fornecedor_id || null
     if (body.conta_contabil_id !== undefined) update.conta_contabil_id = body.conta_contabil_id || null
+    // Interação do usuário (editar conta/cliente/fornecedor ou confirmar) zera a confiança
+    if (body.confirmar || body.conta_contabil_id !== undefined || body.cliente_id !== undefined || body.fornecedor_id !== undefined) {
+      update.confianca = null
+    }
     if (!Object.keys(update).length) return NextResponse.json({ error: 'nada para atualizar' }, { status: 400 })
 
     const { data, error } = await supabase
@@ -173,7 +177,7 @@ export async function GET(req: NextRequest) {
 
     const { data: txs, error: txErr } = await supabase
       .from('transacoes')
-      .select('id, data, descricao, valor, tipo, cliente_id, fornecedor_id, conta_contabil_id, manual, transferencia_id')
+      .select('id, data, descricao, valor, tipo, cliente_id, fornecedor_id, conta_contabil_id, manual, transferencia_id, confianca')
       .eq('conta_id', contaId)
       .order('data', { ascending: true })
       .order('created_at', { ascending: true })
