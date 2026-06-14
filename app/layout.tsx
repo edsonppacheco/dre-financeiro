@@ -15,10 +15,10 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
     <html lang="pt-BR">
       <body className={`${inter.className} bg-gray-50 min-h-screen`}>
         <div className="flex min-h-screen">
+          <SideNav />
           <main className="flex-1 min-w-0 px-4 py-8">
             <div className="max-w-7xl mx-auto">{children}</div>
           </main>
-          <SideNav />
         </div>
       </body>
     </html>
