@@ -18,18 +18,21 @@ export function calcularDrePlano(
   somaPorConta: Record<string, number>
 ): { linhas: LinhaDreCalc[]; lucroLiquido: number } {
   const ordenadas = [...plano].sort((a, b) => a.ordem - b.ordem)
-  const folhas = ordenadas.filter((p) => p.tipo !== 'grupo')
+  // Distribuição de lucros NÃO entra na DRE (é apropriação de lucro, vai no balanço)
+  const folhas = ordenadas.filter((p) => p.tipo !== 'grupo' && p.tipo !== 'distribuicao')
 
-  const linhas: LinhaDreCalc[] = ordenadas.map((p) => {
-    const nivel = p.pai_id ? 1 : 0
-    if (p.tipo === 'grupo') {
-      const valor = folhas
-        .filter((f) => f.codigo.startsWith(p.codigo + '.'))
-        .reduce((s, f) => s + (somaPorConta[f.id] ?? 0), 0)
-      return { codigo: p.codigo, nome: p.nome, tipo: p.tipo, nivel, valor: round(valor) }
-    }
-    return { codigo: p.codigo, nome: p.nome, tipo: p.tipo, nivel, valor: round(somaPorConta[p.id] ?? 0) }
-  })
+  const linhas: LinhaDreCalc[] = ordenadas
+    .filter((p) => p.tipo !== 'distribuicao')
+    .map((p) => {
+      const nivel = p.pai_id ? 1 : 0
+      if (p.tipo === 'grupo') {
+        const valor = folhas
+          .filter((f) => f.codigo.startsWith(p.codigo + '.'))
+          .reduce((s, f) => s + (somaPorConta[f.id] ?? 0), 0)
+        return { codigo: p.codigo, nome: p.nome, tipo: p.tipo, nivel, valor: round(valor) }
+      }
+      return { codigo: p.codigo, nome: p.nome, tipo: p.tipo, nivel, valor: round(somaPorConta[p.id] ?? 0) }
+    })
 
   const lucroLiquido = round(folhas.reduce((s, f) => s + (somaPorConta[f.id] ?? 0), 0))
   return { linhas, lucroLiquido }
@@ -50,7 +53,7 @@ export function calcularDreMulti(
   const porColuna: Record<string, ReturnType<typeof calcularDrePlano>> = {}
   for (const col of colunas) porColuna[col] = calcularDrePlano(plano, somasPorColuna[col] ?? {})
 
-  const ordenadas = [...plano].sort((a, b) => a.ordem - b.ordem)
+  const ordenadas = [...plano].sort((a, b) => a.ordem - b.ordem).filter((p) => p.tipo !== 'distribuicao')
   const linhas: LinhaDreMulti[] = ordenadas.map((p) => {
     const valores: Record<string, number> = {}
     for (const col of colunas) {

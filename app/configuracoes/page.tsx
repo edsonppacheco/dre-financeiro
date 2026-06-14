@@ -11,11 +11,11 @@ type PlanoConta = {
   ordem: number
 }
 
+// "Distribuição" não é mais um tipo criável no plano de contas (vira item de série no relatório)
 const TIPOS: { value: string; label: string }[] = [
   { value: 'receita', label: 'Receita' },
   { value: 'imposto', label: 'Imposto' },
   { value: 'despesa', label: 'Despesa' },
-  { value: 'distribuicao', label: 'Distribuição' },
   { value: 'grupo', label: 'Grupo' },
 ]
 

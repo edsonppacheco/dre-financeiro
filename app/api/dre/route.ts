@@ -74,40 +74,69 @@ export async function GET(req: NextRequest) {
       .select('conta_id, data, valor, tipo, conta_contabil_id')
       .lte('data', `${ano}-12-31`)
 
-    const distribIds = plano.filter((p) => p.tipo === 'distribuicao').map((p) => p.id)
+    const distribIds = new Set(plano.filter((p) => p.tipo === 'distribuicao').map((p) => p.id))
+    const ehDistrib = (contaContabilId: string | null) => !!contaContabilId && distribIds.has(contaContabilId)
+
+    // Transferências do ano (para recebimento/pagamento de empréstimos por período)
+    const { data: transfs } = await supabase
+      .from('transferencias')
+      .select('conta_origem_id, conta_destino_id, data, valor')
+      .gte('data', `${ano}-01-01`).lte('data', `${ano}-12-31`)
+
+    // Capital inicial = patrimônio de abertura (soma dos saldos iniciais de todas as contas)
+    const capitalInicial = round((contasRaw ?? []).reduce((s, c) => s + Number(c.saldo_inicial ?? 0), 0))
+
     const balanco: Record<string, {
-      contasCorrentes: number; cartoes: number; emprestimos: number
+      contasCorrentes: number; cartoes: number; emprestimos: number; capitalInicial: number
       lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number
+      totalAtivos: number; totalPassivosPL: number
     }> = {}
+    const serie: Record<string, { distribuicaoMes: number; recebimentoEmprestimos: number; pagamentoEmprestimos: number }> = {}
 
     for (const col of colunas) {
-      let corr = 0, cart = 0, empr = 0, retido = 0
+      let corr = 0, cart = 0, empr = 0, retido = 0, distribAcum = 0
       for (const c of contasRaw ?? []) {
         if (tipoConta[c.id] === 'corrente') corr += saldoIni[c.id]
         else if (tipoConta[c.id] === 'cartao') cart += saldoIni[c.id]
         else if (tipoConta[c.id] === 'emprestimo') empr += saldoIni[c.id]
       }
+      let distribMes = 0
       for (const t of txAll ?? []) {
-        if ((t.data as string) > col.fim) continue
+        const d = t.data as string
         const signed = t.tipo === 'credito' ? Number(t.valor) : -Number(t.valor)
         const tp = tipoConta[t.conta_id as string]
-        if (tp === 'corrente') corr += signed
-        else if (tp === 'cartao') cart += signed
-        else if (tp === 'emprestimo') empr += signed
-        if (t.conta_contabil_id) retido += signed // lucro acumulado (retido)
+        if (d <= col.fim) {
+          if (tp === 'corrente') corr += signed
+          else if (tp === 'cartao') cart += signed
+          else if (tp === 'emprestimo') empr += signed
+          if (ehDistrib(t.conta_contabil_id as string | null)) distribAcum += -signed // acumulado distribuído (magnitude)
+          else if (t.conta_contabil_id && d < col.inicio) retido += signed // lucro de períodos passados
+        }
+        // distribuição DENTRO do período (linha de série)
+        if (ehDistrib(t.conta_contabil_id as string | null) && d >= col.inicio && d <= col.fim) distribMes += -signed
       }
-      const distribPeriodo = distribIds.reduce((s, id) => s + (somasPorColuna[col.chave]?.[id] ?? 0), 0)
+      // empréstimos: recebimento (origem=empréstimo) e pagamento (destino=empréstimo) no período
+      let receb = 0, pag = 0
+      for (const tr of transfs ?? []) {
+        const d = tr.data as string
+        if (d < col.inicio || d > col.fim) continue
+        if (tipoConta[tr.conta_origem_id as string] === 'emprestimo') receb += Number(tr.valor)
+        if (tipoConta[tr.conta_destino_id as string] === 'emprestimo') pag += Number(tr.valor)
+      }
+
+      const lucroPeriodo = lucroLiquido[col.chave]
+      const totalAtivos = round(corr)
+      // Passivos (dívidas = -saldo de empréstimo/cartão) + Patrimônio (capital + lucros - distribuídos)
+      const totalPassivosPL = round(-empr - cart + capitalInicial + lucroPeriodo + retido - distribAcum)
       balanco[col.chave] = {
-        contasCorrentes: round(corr),
-        cartoes: round(cart),
-        emprestimos: round(empr),
-        lucroLiquido: lucroLiquido[col.chave],
-        lucrosDistribuidos: round(-distribPeriodo), // magnitude (saída)
-        lucrosRetidos: round(retido),
+        contasCorrentes: round(corr), cartoes: round(cart), emprestimos: round(empr), capitalInicial,
+        lucroLiquido: lucroPeriodo, lucrosDistribuidos: round(distribAcum), lucrosRetidos: round(retido),
+        totalAtivos, totalPassivosPL,
       }
+      serie[col.chave] = { distribuicaoMes: round(distribMes), recebimentoEmprestimos: round(receb), pagamentoEmprestimos: round(pag) }
     }
 
-    return NextResponse.json({ anos, ano, visao, colunas, linhas, lucroLiquido, balanco, totalTransacoes: (txs ?? []).length })
+    return NextResponse.json({ anos, ano, visao, colunas, linhas, lucroLiquido, balanco, serie, totalTransacoes: (txs ?? []).length })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
   }

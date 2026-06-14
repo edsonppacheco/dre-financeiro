@@ -5,12 +5,14 @@ import { useCallback, useEffect, useState } from 'react'
 type Coluna = { chave: string; label: string }
 type LinhaCalc = { codigo: string; nome: string; tipo: string; nivel: number; valores: Record<string, number> }
 type Visao = 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes'
-type BalancoCol = { contasCorrentes: number; cartoes: number; emprestimos: number; lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number }
+type BalancoCol = { contasCorrentes: number; cartoes: number; emprestimos: number; capitalInicial: number; lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number; totalAtivos: number; totalPassivosPL: number }
+type SerieCol = { distribuicaoMes: number; recebimentoEmprestimos: number; pagamentoEmprestimos: number }
 
 const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+const TOTAL = '__total__'
 
-export default function DrePage() {
+export default function RelatoriosPage() {
   const [anos, setAnos] = useState<number[]>([])
   const [ano, setAno] = useState<number | null>(null)
   const [visao, setVisao] = useState<Visao>('meses')
@@ -20,6 +22,7 @@ export default function DrePage() {
   const [linhas, setLinhas] = useState<LinhaCalc[]>([])
   const [lucroLiquido, setLucroLiquido] = useState<Record<string, number>>({})
   const [balanco, setBalanco] = useState<Record<string, BalancoCol>>({})
+  const [serie, setSerie] = useState<Record<string, SerieCol>>({})
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
 
@@ -33,7 +36,8 @@ export default function DrePage() {
       .then((r) => r.json())
       .then((d) => {
         if (d.error) throw new Error(d.error)
-        setAnos(d.anos); setAno(d.ano); setColunas(d.colunas); setLinhas(d.linhas); setLucroLiquido(d.lucroLiquido); setBalanco(d.balanco ?? {})
+        setAnos(d.anos); setAno(d.ano); setColunas(d.colunas); setLinhas(d.linhas)
+        setLucroLiquido(d.lucroLiquido); setBalanco(d.balanco ?? {}); setSerie(d.serie ?? {})
       })
       .catch((e) => setErro(e.message))
       .finally(() => setLoading(false))
@@ -59,18 +63,47 @@ export default function DrePage() {
     return `/api/exportar?${p.toString()}`
   }
 
-  if (loading && !linhas.length) {
-    return <div className="max-w-5xl mx-auto"><div className="animate-pulse space-y-4"><div className="h-8 w-72 bg-slate-200 rounded" /><div className="h-96 bg-slate-100 rounded-xl" /></div></div>
+  // Coluna de total do período (só quando há mais de uma coluna)
+  const temTotal = colunas.length > 1
+  const cols: Coluna[] = temTotal ? [...colunas, { chave: TOTAL, label: 'Total' }] : colunas
+  const chaves = colunas.map((c) => c.chave)
+  const ultima = colunas[colunas.length - 1]?.chave
+  const primeira = colunas[0]?.chave
+
+  const somaCols = (get: (k: string) => number) => chaves.reduce((s, k) => s + (get(k) || 0), 0)
+  // DRE / lucro líquido / série: total = soma; balanço (saldos): total = última coluna
+  const valDRE = (l: LinhaCalc, k: string) => k === TOTAL ? somaCols((kk) => l.valores[kk] ?? 0) : (l.valores[k] ?? 0)
+  const valLL = (k: string) => k === TOTAL ? somaCols((kk) => lucroLiquido[kk] ?? 0) : (lucroLiquido[k] ?? 0)
+  const valSerie = (f: keyof SerieCol, k: string) => k === TOTAL ? somaCols((kk) => serie[kk]?.[f] ?? 0) : (serie[k]?.[f] ?? 0)
+  const valBal = (f: keyof BalancoCol, k: string) => {
+    if (k !== TOTAL) return balanco[k]?.[f] ?? 0
+    // Total: saldos = fim do período (última coluna); fluxos = soma/início
+    if (f === 'lucroLiquido') return somaCols((kk) => balanco[kk]?.lucroLiquido ?? 0)
+    if (f === 'lucrosRetidos') return balanco[primeira]?.lucrosRetidos ?? 0
+    if (f === 'totalPassivosPL') {
+      const b = balanco[ultima]
+      return -(b?.emprestimos ?? 0) - (b?.cartoes ?? 0) + (b?.capitalInicial ?? 0) + somaCols((kk) => balanco[kk]?.lucroLiquido ?? 0) + (balanco[primeira]?.lucrosRetidos ?? 0) - (b?.lucrosDistribuidos ?? 0)
+    }
+    return balanco[ultima]?.[f] ?? 0 // contasCorrentes, cartoes, emprestimos, capitalInicial, lucrosDistribuidos, totalAtivos
   }
+
+  const cellCls = (v: number) => v < 0 ? 'text-red-600' : v > 0 ? 'text-green-600' : 'text-slate-300'
+  const num = (v: number) => v === 0 ? '—' : fmt(v)
+
+  if (loading && !linhas.length) {
+    return <div className="max-w-6xl mx-auto"><div className="animate-pulse space-y-4"><div className="h-8 w-80 bg-slate-200 rounded" /><div className="h-96 bg-slate-100 rounded-xl" /></div></div>
+  }
+
+  const thCls = (k: string) => `px-4 py-3 font-medium text-right whitespace-nowrap ${k === TOTAL ? 'bg-slate-100 text-slate-700' : ''}`
+  const tdCls = (k: string) => `px-4 py-2.5 text-right tabular-nums ${k === TOTAL ? 'bg-slate-50 font-semibold' : ''}`
 
   return (
     <div className="max-w-6xl mx-auto">
       <div className="mb-5">
-        <h1 className="text-2xl font-bold text-slate-800">DRE — Demonstração do Resultado</h1>
-        <p className="text-slate-500 mt-1">Apurada pelo plano de contas, com visão anual, trimestral ou mensal</p>
+        <h1 className="text-2xl font-bold text-slate-800">Relatórios Financeiros</h1>
+        <p className="text-slate-500 mt-1">DRE e Balanço pelo plano de contas, por período</p>
       </div>
 
-      {/* Controles de visão */}
       <div className="flex flex-wrap items-center gap-2 mb-4">
         <select value={ano ?? ''} onChange={(e) => recarregar({ ano: Number(e.target.value) })} disabled={!anos.length} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-500">
           {anos.length === 0 && <option value="">—</option>}
@@ -102,7 +135,7 @@ export default function DrePage() {
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">
           <p className="text-4xl mb-3">📊</p>
           <p className="font-medium">Sem dados no período</p>
-          <p className="text-sm mt-1">Classifique lançamentos no extrato (conta contábil) para gerar a DRE</p>
+          <p className="text-sm mt-1">Classifique lançamentos no extrato (conta contábil) para gerar os relatórios</p>
         </div>
       ) : (
         <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
@@ -110,80 +143,61 @@ export default function DrePage() {
             <thead>
               <tr className="border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
                 <th className="px-4 py-3 font-medium text-left">Conta</th>
-                {colunas.map((c) => <th key={c.chave} className="px-4 py-3 font-medium text-right whitespace-nowrap">{c.label}</th>)}
+                {cols.map((c) => <th key={c.chave} className={thCls(c.chave)}>{c.label}</th>)}
               </tr>
             </thead>
             <tbody>
+              {/* DRE */}
+              <tr className="bg-slate-100 text-[11px] font-bold text-slate-500 uppercase tracking-wide"><td className="px-4 py-1.5" colSpan={cols.length + 1}>Demonstração do Resultado</td></tr>
               {linhas.map((l) => {
                 const isGrupo = l.tipo === 'grupo'
-                const rowCls = isGrupo ? 'bg-slate-50 font-semibold text-slate-700' : 'text-slate-600'
                 return (
-                  <tr key={l.codigo} className={`border-b border-slate-100 ${rowCls}`}>
-                    <td className={`px-4 py-2.5 ${l.nivel === 1 ? 'pl-8' : ''}`}>
-                      <span className="text-xs text-slate-400 mr-2 tabular-nums">{l.codigo}</span>{l.nome}
-                    </td>
-                    {colunas.map((c) => {
-                      const v = l.valores[c.chave] ?? 0
-                      return <td key={c.chave} className={`px-4 py-2.5 text-right tabular-nums ${v < 0 ? 'text-red-600' : v > 0 ? 'text-green-600' : 'text-slate-300'}`}>{v === 0 ? '—' : fmt(v)}</td>
-                    })}
+                  <tr key={l.codigo} className={`border-b border-slate-100 ${isGrupo ? 'bg-slate-50 font-semibold text-slate-700' : 'text-slate-600'}`}>
+                    <td className={`px-4 py-2.5 ${l.nivel === 1 ? 'pl-8' : ''}`}><span className="text-xs text-slate-400 mr-2 tabular-nums">{l.codigo}</span>{l.nome}</td>
+                    {cols.map((c) => { const v = valDRE(l, c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${cellCls(v)}`}>{num(v)}</td> })}
                   </tr>
                 )
               })}
-              <tr className="bg-blue-50/60 font-bold text-slate-800 border-t-2 border-blue-100">
+              <tr className="bg-blue-50/60 font-bold text-slate-800 border-y border-blue-100">
                 <td className="px-4 py-3">Lucro Líquido</td>
-                {colunas.map((c) => {
-                  const v = lucroLiquido[c.chave] ?? 0
-                  return <td key={c.chave} className={`px-4 py-3 text-right tabular-nums ${v < 0 ? 'text-red-600' : 'text-green-700'}`}>{fmt(v)}</td>
-                })}
+                {cols.map((c) => { const v = valLL(c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${v < 0 ? 'text-red-600' : 'text-green-700'}`}>{fmt(v)}</td> })}
               </tr>
+
+              {/* Movimentações do período (séries) */}
+              <tr className="bg-slate-100 text-[11px] font-bold text-slate-500 uppercase tracking-wide"><td className="px-4 py-1.5" colSpan={cols.length + 1}>Movimentações do período</td></tr>
+              {([
+                ['Distribuição de lucros', 'distribuicaoMes'],
+                ['Recebimento de empréstimos', 'recebimentoEmprestimos'],
+                ['Pagamento de empréstimos', 'pagamentoEmprestimos'],
+              ] as [string, keyof SerieCol][]).map(([label, f]) => (
+                <tr key={f} className="border-b border-slate-100 text-slate-600">
+                  <td className="px-4 py-2.5">{label}</td>
+                  {cols.map((c) => { const v = valSerie(f, c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} text-slate-700`}>{v === 0 ? '—' : fmt(v)}</td> })}
+                </tr>
+              ))}
+
+              {/* Balanço */}
+              <tr className="bg-slate-100 text-[11px] font-bold text-slate-500 uppercase tracking-wide"><td className="px-4 py-1.5" colSpan={cols.length + 1}>Balanço Patrimonial (fim do período)</td></tr>
+              <tr className="text-[11px] font-semibold text-slate-500 uppercase"><td className="px-4 py-1.5">Ativos</td>{cols.map((c) => <td key={c.chave} className={tdCls(c.chave)} />)}</tr>
+              <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">Saldo em contas correntes</td>{cols.map((c) => { const v = valBal('contasCorrentes', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${cellCls(v)}`}>{num(v)}</td> })}</tr>
+              <tr className="border-b border-slate-200 font-semibold text-slate-800"><td className="px-4 py-2.5">Total de ativos</td>{cols.map((c) => { const v = valBal('totalAtivos', c.chave); return <td key={c.chave} className={tdCls(c.chave)}>{fmt(v)}</td> })}</tr>
+              <tr className="text-[11px] font-semibold text-slate-500 uppercase"><td className="px-4 py-1.5">Passivos e Patrimônio</td>{cols.map((c) => <td key={c.chave} className={tdCls(c.chave)} />)}</tr>
+              <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">Empréstimos (a pagar)</td>{cols.map((c) => { const v = -valBal('emprestimos', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${v > 0 ? 'text-red-600' : 'text-slate-300'}`}>{v === 0 ? '—' : fmt(v)}</td> })}</tr>
+              <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">Cartões (a pagar)</td>{cols.map((c) => { const v = -valBal('cartoes', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${v > 0 ? 'text-red-600' : 'text-slate-300'}`}>{v === 0 ? '—' : fmt(v)}</td> })}</tr>
+              <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">Capital inicial</td>{cols.map((c) => { const v = valBal('capitalInicial', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} text-slate-700`}>{num(v)}</td> })}</tr>
+              <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">Lucro líquido (período)</td>{cols.map((c) => { const v = valBal('lucroLiquido', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${cellCls(v)}`}>{num(v)}</td> })}</tr>
+              <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">Lucros retidos (acumulado)</td>{cols.map((c) => { const v = valBal('lucrosRetidos', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${cellCls(v)}`}>{num(v)}</td> })}</tr>
+              <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">(−) Lucros distribuídos (acumulado)</td>{cols.map((c) => { const v = valBal('lucrosDistribuidos', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${v > 0 ? 'text-red-600' : 'text-slate-300'}`}>{v === 0 ? '—' : '-' + fmt(v)}</td> })}</tr>
+              <tr className="border-b border-slate-200 font-semibold text-slate-800"><td className="px-4 py-2.5">Total passivos + patrimônio</td>{cols.map((c) => { const v = valBal('totalPassivosPL', c.chave); const ok = Math.abs(v - valBal('totalAtivos', c.chave)) < 0.01; return <td key={c.chave} className={`${tdCls(c.chave)} ${ok ? '' : 'text-amber-600'}`} title={ok ? 'Confere com o ativo' : 'Difere do ativo'}>{fmt(v)}</td> })}</tr>
             </tbody>
           </table>
         </div>
       )}
 
-      {/* Balanço — foto no fim de cada período, nas mesmas colunas */}
-      {colunas.length > 0 && Object.keys(balanco).length > 0 && (() => {
-        const temEmprestimo = colunas.some((c) => Math.abs(balanco[c.chave]?.emprestimos ?? 0) > 0.005)
-        const cell = (key: string, v: number, pos = false) => (
-          <td key={key} className={`px-4 py-2.5 text-right tabular-nums ${v < 0 ? 'text-red-600' : v > 0 ? (pos ? 'text-green-600' : 'text-slate-700') : 'text-slate-300'}`}>{v === 0 ? '—' : fmt(v)}</td>
-        )
-        const linha = (label: string, get: (b: BalancoCol) => number, opts: { grupo?: boolean; pos?: boolean; total?: boolean } = {}) => (
-          <tr className={`border-b border-slate-100 ${opts.grupo ? 'bg-slate-50 font-semibold text-slate-700 uppercase text-xs tracking-wide' : opts.total ? 'font-semibold text-slate-800' : 'text-slate-600'}`}>
-            <td className={`px-4 py-2.5 ${!opts.grupo && !opts.total ? 'pl-8' : ''}`}>{label}</td>
-            {colunas.map((c) => opts.grupo ? <td key={c.chave} /> : cell(c.chave, get(balanco[c.chave]), opts.pos))}
-          </tr>
-        )
-        return (
-          <div className="mt-8">
-            <h2 className="text-lg font-bold text-slate-800 mb-3">Balanço Patrimonial <span className="text-sm font-normal text-slate-400">— no fim de cada período</span></h2>
-            <div className="bg-white rounded-xl border border-slate-200 overflow-x-auto">
-              <table className="w-full text-sm">
-                <thead>
-                  <tr className="border-b border-slate-200 text-xs text-slate-500 uppercase tracking-wide">
-                    <th className="px-4 py-3 font-medium text-left">Conta</th>
-                    {colunas.map((c) => <th key={c.chave} className="px-4 py-3 font-medium text-right whitespace-nowrap">{c.label}</th>)}
-                  </tr>
-                </thead>
-                <tbody>
-                  {linha('Ativos', () => 0, { grupo: true })}
-                  {linha('Saldo em contas correntes', (b) => b.contasCorrentes, { pos: true })}
-                  {linha('Total de ativos', (b) => b.contasCorrentes, { total: true })}
-                  {linha('Passivos e Patrimônio', () => 0, { grupo: true })}
-                  {linha('Cartões de crédito (saldo)', (b) => b.cartoes)}
-                  {temEmprestimo && linha('Empréstimos (saldo)', (b) => b.emprestimos)}
-                  {linha('Lucro líquido (período)', (b) => b.lucroLiquido, { pos: true })}
-                  {linha('Lucros distribuídos (período)', (b) => -b.lucrosDistribuidos)}
-                  {linha('Lucros retidos (acumulado)', (b) => b.lucrosRetidos, { pos: true, total: true })}
-                </tbody>
-              </table>
-            </div>
-          </div>
-        )
-      })()}
-
       <p className="text-xs text-slate-400 mt-3">
-        Valores somados pela conta contábil atribuída no extrato, pela data real de cada lançamento. Receitas positivas; impostos e despesas, negativas.
-        O balanço é a posição no fim de cada período: saldos das contas (acumulados) e os lucros do período/acumulados.
+        Valores pela conta contábil atribuída no extrato e pela data real de cada lançamento. Distribuição de lucros não entra na DRE
+        (aparece em Movimentações e reduz o patrimônio no Balanço). Empréstimos/cartões entram no Balanço como saldo. A coluna “Total”
+        soma os fluxos do período; no Balanço mostra a posição no fim do período.
       </p>
     </div>
   )
