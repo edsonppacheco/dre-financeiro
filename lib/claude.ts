@@ -35,13 +35,16 @@ Retorne JSON:
 {"saldo_inicial":<numero>,"transacoes":[{"data":"YYYY-MM-DD","descricao":"...","valor":<numero positivo>,"tipo":"credito|debito"}],"saldos_dia":[{"data":"YYYY-MM-DD","saldo":<numero>}]}
 
 TEXTO DO EXTRATO:
-${texto.slice(0, 14000)}`,
+${texto.slice(0, 80000)}`,
       },
     ],
   })
 
   const content = response.content[0]
   if (content.type !== 'text') throw new Error('Resposta inesperada da Claude API')
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error('Extrato muito grande para uma única extração. Divida o arquivo em períodos menores (ex: por semestre) e reenvie.')
+  }
   const match = content.text.match(/\{[\s\S]*\}/)
   if (!match) throw new Error('JSON não encontrado na resposta')
   const parsed = JSON.parse(match[0]) as ExtratoExtraido

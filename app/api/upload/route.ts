@@ -4,6 +4,9 @@ import { createSupabaseAdminClient } from '@/lib/supabase'
 import { parseExcel } from '@/lib/parsers/excel'
 import { parsePDF } from '@/lib/parsers/pdf'
 
+// Extração por IA de extratos grandes pode demorar; amplia o limite de duração.
+export const maxDuration = 300
+
 export async function POST(req: NextRequest) {
   try {
     const formData = await req.formData()
