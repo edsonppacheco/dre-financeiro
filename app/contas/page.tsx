@@ -212,21 +212,21 @@ export default function ContasExtratoPage() {
   const cartoes = contas.filter((c) => c.tipo === 'cartao')
   const emprestimos = contas.filter((c) => c.tipo === 'emprestimo')
 
-  // transferência entre contas
-  const [transfModal, setTransfModal] = useState(false)
-  const [tDestino, setTDestino] = useState('')
-  const [tData, setTData] = useState('')
-  const [tValor, setTValor] = useState('')
-  const [tDesc, setTDesc] = useState('')
-  const criarTransferencia = async () => {
-    if (!contaId || !tDestino || !tData || !tValor) return
+  // marca/desmarca um lançamento existente como transferência para outra conta
+  const marcarTransferencia = async (l: Lancamento, destinoId: string) => {
     setBusy(true); setErro(null)
     try {
-      const res = await fetch('/api/transferencias', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ conta_origem_id: contaId, conta_destino_id: tDestino, data: tData, valor: parseNum(tValor), descricao: tDesc || null }) })
-      const d = await res.json()
+      const d = await fetch('/api/transferencias', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ lancamento_id: l.id, conta_destino_id: destinoId }) }).then((r) => r.json())
       if (d.error) throw new Error(d.error)
-      setTransfModal(false); setTDestino(''); setTValor(''); setTDesc('')
+      carregar(contaId, mes)
+    } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
+  }
+  const desfazerTransferencia = async (l: Lancamento) => {
+    setBusy(true); setErro(null)
+    try {
+      const d = await fetch(`/api/transferencias?lancamento_id=${l.id}`, { method: 'DELETE' }).then((r) => r.json())
+      if (d.error) throw new Error(d.error)
       carregar(contaId, mes)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
@@ -258,7 +258,6 @@ export default function ContasExtratoPage() {
           </select>
           <button onClick={sugerirContas} disabled={!contaId || sugerindo} className="bg-violet-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-violet-700 disabled:opacity-50">{sugerindo ? 'Classificando…' : '✨ Sugerir contas'}</button>
           <button onClick={conciliar} disabled={!contaId} className="bg-white border border-slate-300 text-slate-700 text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">⚖ Conciliar</button>
-          <button onClick={() => { setTransfModal(true); setTData('') }} disabled={!contaId || contas.length < 2} className="bg-white border border-slate-300 text-slate-700 text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">⇄ Transferir</button>
           <button onClick={() => { setModalNovo(true); setNData('') }} disabled={!contaId} className="bg-slate-800 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">+ Lançamento</button>
           <Link href="/contas/gerenciar" className="text-sm text-slate-500 hover:text-slate-800 px-3 py-2 border border-slate-200 rounded-lg">⚙ Gerenciar</Link>
         </div>
@@ -296,8 +295,9 @@ export default function ContasExtratoPage() {
                     </div>
                     {l.transferencia_id ? (
                       <div className="col-span-2 text-xs text-slate-500 flex items-center gap-1.5">
-                        <span className="px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-medium">⇄ Transferência</span>
+                        <span className="px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-medium whitespace-nowrap">⇄ Transferência</span>
                         <span className="truncate">{l.tipo === 'debito' ? 'para' : 'de'} {l.transferencia_contraparte ?? '—'}</span>
+                        <button onClick={() => desfazerTransferencia(l)} disabled={busy} className="text-slate-400 hover:text-red-500 ml-auto" title="Desfazer transferência">✕</button>
                       </div>
                     ) : (
                       <>
@@ -308,9 +308,14 @@ export default function ContasExtratoPage() {
                           <optgroup label="Clientes">{ext.clientes.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.nome}</option>)}</optgroup>
                           <optgroup label="Fornecedores">{ext.fornecedores.map((f) => <option key={f.id} value={`f:${f.id}`}>{f.nome}</option>)}</optgroup>
                         </select>
-                        <select value={l.conta_contabil_id ?? ''} disabled={busy} onChange={(e) => patch({ id: l.id, conta_contabil_id: e.target.value })} className="border border-slate-200 rounded px-2 py-1 text-xs w-full">
+                        <select value={l.conta_contabil_id ?? ''} disabled={busy}
+                          onChange={(e) => { const v = e.target.value; if (v.startsWith('transf:')) marcarTransferencia(l, v.slice(7)); else patch({ id: l.id, conta_contabil_id: v }) }}
+                          className="border border-slate-200 rounded px-2 py-1 text-xs w-full">
                           <option value="">—</option>
                           {planoFolhas.map((p) => <option key={p.id} value={p.id}>{p.codigo} · {p.nome}</option>)}
+                          <optgroup label="⇄ Transferência para">
+                            {contas.filter((c) => c.id !== contaId).map((c) => <option key={c.id} value={`transf:${c.id}`}>{c.nome}</option>)}
+                          </optgroup>
                         </select>
                       </>
                     )}
@@ -433,43 +438,6 @@ export default function ContasExtratoPage() {
               {concPares && concPares.length > 0 && (
                 <button onClick={aplicarConciliacao} disabled={busy || concSel.size === 0} className="bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">Remover {concSel.size} selecionada(s)</button>
               )}
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Modal transferência entre contas */}
-      {transfModal && (
-        <div className="fixed inset-0 bg-black/30 flex items-center justify-center p-4 z-50" onClick={() => setTransfModal(false)}>
-          <div className="bg-white rounded-xl shadow-xl w-full max-w-md p-5" onClick={(e) => e.stopPropagation()}>
-            <h2 className="font-bold text-slate-800 mb-1">Transferência entre contas</h2>
-            <p className="text-xs text-slate-400 mb-4">Cria dois lançamentos: débito em {contas.find((c) => c.id === contaId)?.nome} e crédito na conta de destino.</p>
-            <div className="space-y-3">
-              <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Para (conta de destino)</label>
-                <select value={tDestino} onChange={(e) => setTDestino(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
-                  <option value="">Selecione…</option>
-                  {contas.filter((c) => c.id !== contaId).map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
-                </select>
-              </div>
-              <div className="flex gap-3">
-                <div>
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Data</label>
-                  <input type="date" value={tData} onChange={(e) => setTData(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-                <div className="flex-1">
-                  <label className="block text-xs font-medium text-slate-500 mb-1">Valor</label>
-                  <input type="text" inputMode="decimal" value={tValor} onChange={(e) => setTValor(e.target.value)} placeholder="0,00" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-                </div>
-              </div>
-              <div>
-                <label className="block text-xs font-medium text-slate-500 mb-1">Descrição (opcional)</label>
-                <input value={tDesc} onChange={(e) => setTDesc(e.target.value)} placeholder="Ex: Pagamento da fatura" className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm" />
-              </div>
-            </div>
-            <div className="flex justify-end gap-2 mt-5">
-              <button onClick={() => setTransfModal(false)} className="text-sm text-slate-500 px-3 py-2">Cancelar</button>
-              <button onClick={criarTransferencia} disabled={busy || !tDestino || !tData || !tValor} className="bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">Transferir</button>
             </div>
           </div>
         </div>
