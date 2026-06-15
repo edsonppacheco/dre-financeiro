@@ -14,6 +14,7 @@ type UploadResult = {
   arquivo: string
   extrato_id?: string
   transacoes?: number
+  ignoradas?: number
   erro?: string
   aviso?: string
   mensagem?: string
@@ -253,7 +254,8 @@ export default function UploadPage() {
                       {isDuplicado && <p className="text-xs text-amber-600">{r.mensagem}</p>}
                       {!r.erro && !isDuplicado && (
                         <p className="text-xs text-slate-400">
-                          {r.transacoes} transação(ões) extraída(s)
+                          {r.transacoes} transação(ões) importada(s)
+                          {(r.ignoradas ?? 0) > 0 && ` · ${r.ignoradas} ignorada(s) (já existiam)`}
                           {hasDiscrepancia && ' · saldo diverge em alguns dias'}
                         </p>
                       )}

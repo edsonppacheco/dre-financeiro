@@ -69,32 +69,45 @@ export async function POST(req: NextRequest) {
         continue
       }
 
-      // ── Detecção de duplicata via saldos do dia ──────────────────────────────
-      // Se a maioria dos saldos do extrato já existem no banco para esta conta,
-      // o arquivo já foi importado antes.
-      if (saldosDia.length > 0) {
-        const datasExtrato = saldosDia.map((s) => s.data)
+      // ── Filtragem de datas já importadas ─────────────────────────────────────
+      // Usa datas distintas em saldos_extrato para identificar o que já existe,
+      // evitando inflação de contagem por duplicatas anteriores no banco.
+      // Em vez de rejeitar o arquivo inteiro, importa apenas as datas novas
+      // (ex: arquivo Jan–Mar onde Jan e Fev já existem → importa só Março).
+      let transacoesParaImportar = transacoes
+      let saldosDiaParaImportar = saldosDia
+      const datasDoArquivo = [...new Set([...transacoes.map((t) => t.data), ...saldosDia.map((s) => s.data)])]
+
+      if (datasDoArquivo.length > 0) {
         const { data: jaExistem } = await supabase
           .from('saldos_extrato')
           .select('data')
           .eq('conta_id', contaId)
-          .in('data', datasExtrato)
-        const sobreposicao = jaExistem?.length ?? 0
-        if (sobreposicao / datasExtrato.length > 0.8) {
-          await supabase.from('extratos').update({ status: 'duplicado' }).eq('id', extrato.id)
-          resultados.push({
-            arquivo: file.name,
-            aviso: 'duplicado',
-            mensagem: `Extrato já importado — ${sobreposicao}/${datasExtrato.length} dias já existem nesta conta.`,
-          })
-          continue
+          .in('data', datasDoArquivo)
+        const datasExistentes = new Set(jaExistem?.map((e) => e.data) ?? [])
+
+        if (datasExistentes.size > 0) {
+          transacoesParaImportar = transacoes.filter((t) => !datasExistentes.has(t.data))
+          saldosDiaParaImportar = saldosDia.filter((s) => !datasExistentes.has(s.data))
+
+          if (transacoesParaImportar.length === 0 && transacoes.length > 0) {
+            await supabase.from('extratos').update({ status: 'duplicado' }).eq('id', extrato.id)
+            resultados.push({
+              arquivo: file.name,
+              aviso: 'duplicado',
+              mensagem: `Extrato já importado — todas as datas já existem nesta conta.`,
+            })
+            continue
+          }
         }
       }
 
+      const ignoradas = transacoes.length - transacoesParaImportar.length
+
       // Insere transações (com conta_id, para aparecerem no extrato da conta)
-      if (transacoes.length > 0) {
+      if (transacoesParaImportar.length > 0) {
         const { error: txErr } = await supabase.from('transacoes').insert(
-          transacoes.map((t) => ({ ...t, extrato_id: extrato.id, conta_id: contaId }))
+          transacoesParaImportar.map((t) => ({ ...t, extrato_id: extrato.id, conta_id: contaId }))
         )
         if (txErr) {
           await supabase.from('extratos').update({ status: 'erro' }).eq('id', extrato.id)
@@ -109,9 +122,9 @@ export async function POST(req: NextRequest) {
         if (saldoInicial !== null) {
           await supabase.from('contas').update({ saldo_inicial: saldoInicial }).eq('id', contaId).eq('saldo_inicial', 0)
         }
-        if (saldosDia.length > 0) {
+        if (saldosDiaParaImportar.length > 0) {
           await supabase.from('saldos_extrato').insert(
-            saldosDia.map((s) => ({ extrato_id: extrato.id, conta_id: contaId, data: s.data, saldo: s.saldo }))
+            saldosDiaParaImportar.map((s) => ({ extrato_id: extrato.id, conta_id: contaId, data: s.data, saldo: s.saldo }))
           )
         }
       } catch { /* ignora: feature de saldo depende de migração */ }
@@ -120,8 +133,8 @@ export async function POST(req: NextRequest) {
       // Compara o saldo acumulado (saldo_inicial + movimentos) com os saldos
       // informados pelo banco para cada dia do período importado.
       const conciliacao: { data: string; saldo_calculado: number; saldo_extrato: number; diferenca: number }[] = []
-      if (saldosDia.length > 0) {
-        const dataFim = [...saldosDia].sort((a, b) => a.data.localeCompare(b.data)).at(-1)!.data
+      if (saldosDiaParaImportar.length > 0) {
+        const dataFim = [...saldosDiaParaImportar].sort((a, b) => a.data.localeCompare(b.data)).at(-1)!.data
         const [{ data: contaDados }, { data: todasTxs }] = await Promise.all([
           supabase.from('contas').select('saldo_inicial').eq('id', contaId).single(),
           supabase.from('transacoes').select('data, valor, tipo').eq('conta_id', contaId).lte('data', dataFim).order('data'),
@@ -133,7 +146,7 @@ export async function POST(req: NextRequest) {
             saldoAcum = Math.round((saldoAcum + (t.tipo === 'credito' ? Number(t.valor) : -Number(t.valor))) * 100) / 100
             saldoCalcPorDia[t.data] = saldoAcum
           }
-          for (const { data, saldo } of saldosDia) {
+          for (const { data, saldo } of saldosDiaParaImportar) {
             const calc = saldoCalcPorDia[data]
             if (calc !== undefined) {
               const diferenca = Math.round((calc - Number(saldo)) * 100) / 100
@@ -143,8 +156,8 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Período detectado pelas datas das transações (substitui o mês de referência manual)
-      const datas = transacoes.map((t) => t.data).sort()
+      // Período detectado pelas datas das transações novas (substitui o mês de referência manual)
+      const datas = transacoesParaImportar.map((t) => t.data).sort()
       const periodo = datas.length
         ? { data_inicio: datas[0], data_fim: datas[datas.length - 1], mes_referencia: `${datas[0].slice(0, 7)}-01` }
         : {}
@@ -152,7 +165,8 @@ export async function POST(req: NextRequest) {
       resultados.push({
         arquivo: file.name,
         extrato_id: extrato.id,
-        transacoes: transacoes.length,
+        transacoes: transacoesParaImportar.length,
+        ...(ignoradas > 0 ? { ignoradas } : {}),
         ...(conciliacao.length > 0 ? { conciliacao } : {}),
       })
     }
