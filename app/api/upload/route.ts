@@ -69,25 +69,40 @@ export async function POST(req: NextRequest) {
         continue
       }
 
-      // ── Filtragem de datas já importadas ─────────────────────────────────────
-      // Critério de "já importado" usa a tabela transacoes (não saldos_extrato),
-      // pois pode haver datas em saldos_extrato sem transações correspondentes
-      // (upload anterior que falhou no meio). Assim, datas com saldo mas sem
-      // transação são corretamente reimportadas.
-      // saldosDia usa saldos_extrato separadamente para não criar entradas duplas.
+      // ── Deduplicação em nível de TRANSAÇÃO (não de data) ─────────────────────
+      // Uma data pode ter várias transações; deduplicar por data descartaria
+      // lançamentos novos só porque o dia já tinha algum (era o que impedia Março
+      // de entrar). A chave é (data, descrição, valor, tipo) e usamos contagem
+      // (multiset): se o banco tem N cópias de uma chave, pulamos só N do arquivo,
+      // preservando lançamentos legítimos idênticos no mesmo dia.
       let transacoesParaImportar = transacoes
       let saldosDiaParaImportar = saldosDia
-      const datasDoArquivo = [...new Set([...transacoes.map((t) => t.data), ...saldosDia.map((s) => s.data)])]
+      const datasDoArquivo = [...transacoes.map((t) => t.data), ...saldosDia.map((s) => s.data)].sort()
 
       if (datasDoArquivo.length > 0) {
+        const dataMin = datasDoArquivo[0]
+        const dataMax = datasDoArquivo[datasDoArquivo.length - 1]
+        // Escopo restrito ao intervalo do arquivo (evita o teto de 1000 linhas)
         const [{ data: txExistentes }, { data: saldosExistentes }] = await Promise.all([
-          supabase.from('transacoes').select('data').eq('conta_id', contaId).in('data', datasDoArquivo),
-          supabase.from('saldos_extrato').select('data').eq('conta_id', contaId).in('data', datasDoArquivo),
+          supabase.from('transacoes').select('data, descricao, valor, tipo').eq('conta_id', contaId).gte('data', dataMin).lte('data', dataMax),
+          supabase.from('saldos_extrato').select('data').eq('conta_id', contaId).gte('data', dataMin).lte('data', dataMax),
         ])
-        const datasComTransacoes = new Set(txExistentes?.map((e) => e.data) ?? [])
-        const datasComSaldos = new Set(saldosExistentes?.map((e) => e.data) ?? [])
 
-        transacoesParaImportar = transacoes.filter((t) => !datasComTransacoes.has(t.data))
+        const chaveTx = (t: { data: string; descricao: string; valor: number; tipo: string }) =>
+          `${t.data}|${t.descricao}|${Number(t.valor).toFixed(2)}|${t.tipo}`
+        const contagemExistente: Record<string, number> = {}
+        for (const t of txExistentes ?? []) {
+          const k = chaveTx(t as { data: string; descricao: string; valor: number; tipo: string })
+          contagemExistente[k] = (contagemExistente[k] ?? 0) + 1
+        }
+        transacoesParaImportar = []
+        for (const t of transacoes) {
+          const k = chaveTx(t)
+          if ((contagemExistente[k] ?? 0) > 0) { contagemExistente[k]--; continue }
+          transacoesParaImportar.push(t)
+        }
+
+        const datasComSaldos = new Set(saldosExistentes?.map((e) => e.data) ?? [])
         saldosDiaParaImportar = saldosDia.filter((s) => !datasComSaldos.has(s.data))
 
         if (transacoesParaImportar.length === 0 && transacoes.length > 0) {
@@ -96,7 +111,7 @@ export async function POST(req: NextRequest) {
           resultados.push({
             arquivo: file.name,
             aviso: 'duplicado',
-            mensagem: `Extrato já importado — ${transacoes.length} transações extraídas pelo parser (${datasUnicas[0]} a ${datasUnicas.at(-1)}), todas as datas já existem nesta conta.`,
+            mensagem: `Extrato já importado — ${transacoes.length} transações extraídas pelo parser (${datasUnicas[0]} a ${datasUnicas.at(-1)}), todas já existem nesta conta.`,
           })
           continue
         }
