@@ -29,7 +29,9 @@ async function extrairTexto(buffer: ArrayBuffer): Promise<string> {
 // Divide o texto em pedaços para extração da IA, quebrando em limites de "dia"
 // (linhas que começam com data) para não cortar transações no meio. Extratos
 // grandes (vários meses) excedem o limite de tokens de uma única chamada.
-const REGEX_DIA = /^\s*\d{1,2}[\s/](jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez|\d{2})/i
+// Reconhece tanto o formato ISO (2023-03-01) — usado pelo Excel — quanto o
+// formato textual de PDF (01 mar / 01/03).
+const REGEX_DIA = /^\s*(\d{4}-\d{2}-\d{2}|\d{1,2}[\s/](jan|fev|mar|abr|mai|jun|jul|ago|set|out|nov|dez|\d{2}))/i
 function dividirEmChunks(texto: string, maxChars = 7000): string[] {
   const linhas = texto.split('\n')
   const chunks: string[] = []

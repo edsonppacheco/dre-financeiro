@@ -92,10 +92,13 @@ export async function POST(req: NextRequest) {
 
           if (transacoesParaImportar.length === 0 && transacoes.length > 0) {
             await supabase.from('extratos').update({ status: 'duplicado' }).eq('id', extrato.id)
+            const datasUnicas = [...new Set(transacoes.map((t) => t.data))].sort()
+            const primeiraData = datasUnicas[0]
+            const ultimaData = datasUnicas[datasUnicas.length - 1]
             resultados.push({
               arquivo: file.name,
               aviso: 'duplicado',
-              mensagem: `Extrato já importado — todas as datas já existem nesta conta.`,
+              mensagem: `Extrato já importado — ${transacoes.length} transações extraídas pelo parser (${primeiraData} a ${ultimaData}), todas as datas já existem nesta conta.`,
             })
             continue
           }
