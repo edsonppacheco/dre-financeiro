@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createSupabaseAdminClient } from '@/lib/supabase'
+import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
 import { calcularDreMulti, type PlanoLinha } from '@/lib/dre-plano'
+
+type TxAgg = { conta_id?: string; data: string; valor: number; tipo: string; conta_contabil_id: string | null }
 
 const MES_ABBR = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
 const ultimoDia = (ano: number, mes: number) => String(new Date(ano, mes, 0).getDate()).padStart(2, '0')
@@ -14,8 +16,10 @@ export async function GET(req: NextRequest) {
     const { searchParams } = new URL(req.url)
 
     // Anos disponíveis (das datas reais das transações classificadas)
-    const { data: datas } = await supabase.from('transacoes').select('data').not('conta_contabil_id', 'is', null)
-    const todasDatas = (datas ?? []).map((d) => d.data as string)
+    const datas = await selectAll<{ data: string }>(
+      () => supabase.from('transacoes').select('data').not('conta_contabil_id', 'is', null)
+    )
+    const todasDatas = datas.map((d) => d.data)
     const anos = Array.from(new Set(todasDatas.map((d) => Number(d.slice(0, 4))))).sort((a, b) => b - a)
     const ano = Number(searchParams.get('ano')) || anos[0] || new Date().getFullYear()
     const visao = (searchParams.get('visao') ?? 'meses') as 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes' | 'anos'
@@ -43,12 +47,14 @@ export async function GET(req: NextRequest) {
     const plano = (planoRaw ?? []) as PlanoLinha[]
 
     // Busca transações do intervalo de uma vez
-    const { data: txs } = await supabase
-      .from('transacoes')
-      .select('data, valor, tipo, conta_contabil_id')
-      .not('conta_contabil_id', 'is', null)
-      .gte('data', rangeIni)
-      .lte('data', rangeFim)
+    const txs = await selectAll<TxAgg>(
+      () => supabase
+        .from('transacoes')
+        .select('data, valor, tipo, conta_contabil_id')
+        .not('conta_contabil_id', 'is', null)
+        .gte('data', rangeIni)
+        .lte('data', rangeFim)
+    )
 
     // Soma por conta, por coluna
     const somasPorColuna: Record<string, Record<string, number>> = {}
@@ -74,10 +80,12 @@ export async function GET(req: NextRequest) {
     for (const c of contasRaw ?? []) { tipoConta[c.id] = c.tipo; saldoIni[c.id] = Number(c.saldo_inicial ?? 0) }
 
     // Todas as transações até o fim do ano (cumulativo p/ saldos e lucros retidos)
-    const { data: txAll } = await supabase
-      .from('transacoes')
-      .select('conta_id, data, valor, tipo, conta_contabil_id')
-      .lte('data', rangeFim)
+    const txAll = await selectAll<TxAgg>(
+      () => supabase
+        .from('transacoes')
+        .select('conta_id, data, valor, tipo, conta_contabil_id')
+        .lte('data', rangeFim)
+    )
 
     const distribIds = new Set(plano.filter((p) => p.tipo === 'distribuicao').map((p) => p.id))
     const ehDistrib = (contaContabilId: string | null) => !!contaContabilId && distribIds.has(contaContabilId)

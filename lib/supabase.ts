@@ -41,6 +41,28 @@ export async function createSupabaseServerClient() {
   })
 }
 
+/**
+ * Busca TODAS as linhas de uma query paginando de 1000 em 1000.
+ * O PostgREST limita cada resposta a 1000 linhas por padrão; sem isso, queries
+ * de agregação (dashboard, DRE, extrato) silenciosamente truncam o histórico e
+ * produzem saldos e totais errados. O callback `build` deve criar uma query NOVA
+ * a cada chamada (o .range() finaliza a query).
+ */
+export async function selectAll<T = Record<string, unknown>>(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  build: () => any
+): Promise<T[]> {
+  const pageSize = 1000
+  const todas: T[] = []
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await build().range(from, from + pageSize - 1)
+    if (error) throw new Error(error.message)
+    todas.push(...((data ?? []) as T[]))
+    if (!data || data.length < pageSize) break
+  }
+  return todas
+}
+
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export function createSupabaseAdminClient(): SupabaseClient<any> {
   const { url } = getSupabaseConfig()

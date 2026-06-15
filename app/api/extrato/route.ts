@@ -175,13 +175,28 @@ export async function GET(req: NextRequest) {
       .single()
     if (contaErr) return NextResponse.json({ error: contaErr.message }, { status: 500 })
 
-    const { data: txs, error: txErr } = await supabase
-      .from('transacoes')
-      .select('id, data, descricao, valor, tipo, cliente_id, fornecedor_id, conta_contabil_id, manual, transferencia_id, confianca')
-      .eq('conta_id', contaId)
-      .order('data', { ascending: true })
-      .order('created_at', { ascending: true })
-    if (txErr) return NextResponse.json({ error: txErr.message }, { status: 500 })
+    // Pagina para buscar TODAS as transações: o PostgREST corta em 1000 linhas por
+    // padrão e, ordenado por data, isso descartaria silenciosamente os meses mais
+    // recentes (o saldo acumulado e o filtro de meses ficariam incompletos).
+    type TxRow = {
+      id: string; data: string; descricao: string; valor: number; tipo: string
+      cliente_id: string | null; fornecedor_id: string | null; conta_contabil_id: string | null
+      manual: boolean; transferencia_id: string | null; confianca: number | null
+    }
+    const txs: TxRow[] = []
+    const pageSize = 1000
+    for (let from = 0; ; from += pageSize) {
+      const { data: pagina, error: txErr } = await supabase
+        .from('transacoes')
+        .select('id, data, descricao, valor, tipo, cliente_id, fornecedor_id, conta_contabil_id, manual, transferencia_id, confianca')
+        .eq('conta_id', contaId)
+        .order('data', { ascending: true })
+        .order('created_at', { ascending: true })
+        .range(from, from + pageSize - 1)
+      if (txErr) return NextResponse.json({ error: txErr.message }, { status: 500 })
+      txs.push(...(pagina ?? []))
+      if (!pagina || pagina.length < pageSize) break
+    }
 
     // Conta de contrapartida das transferências (a "conta de pagamento")
     const transfIds = Array.from(new Set((txs ?? []).map((t) => t.transferencia_id).filter(Boolean)))

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createSupabaseAdminClient } from '@/lib/supabase'
+import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
 
 const round = (x: number) => Math.round(x * 100) / 100
 const mesStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -13,10 +13,12 @@ export async function GET(req: NextRequest) {
     const supabase = createSupabaseAdminClient()
     const visao = new URL(req.url).searchParams.get('visao') ?? 'mes'
 
-    const [{ data: contasRaw }, { data: planoRaw }, { data: txAll }] = await Promise.all([
+    const [{ data: contasRaw }, { data: planoRaw }, txAll] = await Promise.all([
       supabase.from('contas').select('id, nome, tipo, saldo_inicial'),
       supabase.from('plano_contas').select('id, tipo'),
-      supabase.from('transacoes').select('conta_id, data, valor, tipo, conta_contabil_id'),
+      selectAll<{ conta_id: string; data: string; valor: number; tipo: string; conta_contabil_id: string | null }>(
+        () => supabase.from('transacoes').select('conta_id, data, valor, tipo, conta_contabil_id')
+      ),
     ])
 
     const tipoCC: Record<string, string> = {}

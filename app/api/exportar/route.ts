@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import ExcelJS from 'exceljs'
-import { createSupabaseAdminClient } from '@/lib/supabase'
+import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
 import { calcularDreMulti, type PlanoLinha } from '@/lib/dre-plano'
 
 const MES_ABBR = ['', 'Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set', 'Out', 'Nov', 'Dez']
@@ -12,8 +12,10 @@ export async function GET(req: NextRequest) {
     const supabase = createSupabaseAdminClient()
     const { searchParams } = new URL(req.url)
 
-    const { data: datas } = await supabase.from('transacoes').select('data').not('conta_contabil_id', 'is', null)
-    const todasDatas = (datas ?? []).map((d) => d.data as string)
+    const datas = await selectAll<{ data: string }>(
+      () => supabase.from('transacoes').select('data').not('conta_contabil_id', 'is', null)
+    )
+    const todasDatas = datas.map((d) => d.data)
     const anos = Array.from(new Set(todasDatas.map((d) => Number(d.slice(0, 4))))).sort((a, b) => b - a)
     const ano = Number(searchParams.get('ano')) || anos[0] || new Date().getFullYear()
     const visao = (searchParams.get('visao') ?? 'meses') as 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes' | 'anos'
@@ -36,8 +38,10 @@ export async function GET(req: NextRequest) {
 
     const rangeIni = colunas[0]?.inicio ?? `${ano}-01-01`
     const rangeFim = colunas[colunas.length - 1]?.fim ?? `${ano}-12-31`
-    const { data: txs } = await supabase.from('transacoes').select('data, valor, tipo, conta_contabil_id')
-      .not('conta_contabil_id', 'is', null).gte('data', rangeIni).lte('data', rangeFim)
+    const txs = await selectAll<{ data: string; valor: number; tipo: string; conta_contabil_id: string | null }>(
+      () => supabase.from('transacoes').select('data, valor, tipo, conta_contabil_id')
+        .not('conta_contabil_id', 'is', null).gte('data', rangeIni).lte('data', rangeFim)
+    )
 
     const somasPorColuna: Record<string, Record<string, number>> = {}
     for (const col of colunas) somasPorColuna[col.chave] = {}
