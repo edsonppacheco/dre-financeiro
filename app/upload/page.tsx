@@ -3,11 +3,21 @@
 import { useState, useCallback, useRef, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
 
+type ConciliacaoItem = {
+  data: string
+  saldo_calculado: number
+  saldo_extrato: number
+  diferenca: number
+}
+
 type UploadResult = {
   arquivo: string
   extrato_id?: string
   transacoes?: number
   erro?: string
+  aviso?: string
+  mensagem?: string
+  conciliacao?: ConciliacaoItem[]
 }
 
 type Documento = {
@@ -222,23 +232,75 @@ export default function UploadPage() {
             <h3 className="font-semibold text-slate-700">Resultado do processamento</h3>
           </div>
           <ul className="divide-y divide-slate-100">
-            {resultados.map((r, idx) => (
-              <li key={idx} className="flex items-center justify-between px-4 py-3">
-                <div>
-                  <p className="text-sm font-medium text-slate-700">{r.arquivo}</p>
-                  {r.erro ? (
-                    <p className="text-xs text-red-500">{r.erro}</p>
-                  ) : (
-                    <p className="text-xs text-slate-400">{r.transacoes} transação(ões) extraída(s)</p>
+            {resultados.map((r, idx) => {
+              const isDuplicado = r.aviso === 'duplicado'
+              const hasDiscrepancia = (r.conciliacao?.length ?? 0) > 0
+              const badgeClass = r.erro
+                ? 'bg-red-100 text-red-600'
+                : isDuplicado
+                ? 'bg-amber-100 text-amber-700'
+                : hasDiscrepancia
+                ? 'bg-orange-100 text-orange-700'
+                : 'bg-green-100 text-green-700'
+              const badgeLabel = r.erro ? 'Erro' : isDuplicado ? 'Duplicado' : hasDiscrepancia ? 'Divergência' : 'OK'
+
+              return (
+                <li key={idx} className="px-4 py-3 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <p className="text-sm font-medium text-slate-700">{r.arquivo}</p>
+                      {r.erro && <p className="text-xs text-red-500">{r.erro}</p>}
+                      {isDuplicado && <p className="text-xs text-amber-600">{r.mensagem}</p>}
+                      {!r.erro && !isDuplicado && (
+                        <p className="text-xs text-slate-400">
+                          {r.transacoes} transação(ões) extraída(s)
+                          {hasDiscrepancia && ' · saldo diverge em alguns dias'}
+                        </p>
+                      )}
+                    </div>
+                    <span className={`text-xs font-medium px-2 py-1 rounded-full ${badgeClass}`}>
+                      {badgeLabel}
+                    </span>
+                  </div>
+
+                  {hasDiscrepancia && (
+                    <div className="rounded-lg border border-orange-200 bg-orange-50 overflow-hidden">
+                      <p className="text-xs font-semibold text-orange-700 px-3 py-2 border-b border-orange-200">
+                        Divergência de saldo — verifique os dias abaixo
+                      </p>
+                      <table className="w-full text-xs">
+                        <thead>
+                          <tr className="text-orange-600 border-b border-orange-200">
+                            <th className="text-left px-3 py-1.5 font-medium">Data</th>
+                            <th className="text-right px-3 py-1.5 font-medium">Calculado</th>
+                            <th className="text-right px-3 py-1.5 font-medium">Extrato</th>
+                            <th className="text-right px-3 py-1.5 font-medium">Diferença</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {r.conciliacao!.map((c) => (
+                            <tr key={c.data} className="border-b border-orange-100 last:border-0">
+                              <td className="px-3 py-1.5 text-slate-600">{fmtData(c.data)}</td>
+                              <td className="px-3 py-1.5 text-right text-slate-600">
+                                {c.saldo_calculado.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                              </td>
+                              <td className="px-3 py-1.5 text-right text-slate-600">
+                                {c.saldo_extrato.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                              </td>
+                              <td className={`px-3 py-1.5 text-right font-semibold ${c.diferenca > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                                {c.diferenca > 0 ? '+' : ''}{c.diferenca.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   )}
-                </div>
-                <span className={`text-xs font-medium px-2 py-1 rounded-full ${r.erro ? 'bg-red-100 text-red-600' : 'bg-green-100 text-green-700'}`}>
-                  {r.erro ? 'Erro' : 'OK'}
-                </span>
-              </li>
-            ))}
+                </li>
+              )
+            })}
           </ul>
-          {state === 'done' && resultados.some((r) => !r.erro) && (
+          {state === 'done' && resultados.some((r) => r.extrato_id && !r.erro) && (
             <div className="px-4 py-4 bg-slate-50 border-t border-slate-100">
               <button
                 onClick={() => router.push('/contas')}

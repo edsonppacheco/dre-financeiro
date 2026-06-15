@@ -69,6 +69,28 @@ export async function POST(req: NextRequest) {
         continue
       }
 
+      // ── Detecção de duplicata via saldos do dia ──────────────────────────────
+      // Se a maioria dos saldos do extrato já existem no banco para esta conta,
+      // o arquivo já foi importado antes.
+      if (saldosDia.length > 0) {
+        const datasExtrato = saldosDia.map((s) => s.data)
+        const { data: jaExistem } = await supabase
+          .from('saldos_extrato')
+          .select('data')
+          .eq('conta_id', contaId)
+          .in('data', datasExtrato)
+        const sobreposicao = jaExistem?.length ?? 0
+        if (sobreposicao / datasExtrato.length > 0.8) {
+          await supabase.from('extratos').update({ status: 'duplicado' }).eq('id', extrato.id)
+          resultados.push({
+            arquivo: file.name,
+            aviso: 'duplicado',
+            mensagem: `Extrato já importado — ${sobreposicao}/${datasExtrato.length} dias já existem nesta conta.`,
+          })
+          continue
+        }
+      }
+
       // Insere transações (com conta_id, para aparecerem no extrato da conta)
       if (transacoes.length > 0) {
         const { error: txErr } = await supabase.from('transacoes').insert(
@@ -94,13 +116,45 @@ export async function POST(req: NextRequest) {
         }
       } catch { /* ignora: feature de saldo depende de migração */ }
 
+      // ── Conciliação: saldo calculado pelas transações vs saldo do extrato ──
+      // Compara o saldo acumulado (saldo_inicial + movimentos) com os saldos
+      // informados pelo banco para cada dia do período importado.
+      const conciliacao: { data: string; saldo_calculado: number; saldo_extrato: number; diferenca: number }[] = []
+      if (saldosDia.length > 0) {
+        const dataFim = [...saldosDia].sort((a, b) => a.data.localeCompare(b.data)).at(-1)!.data
+        const [{ data: contaDados }, { data: todasTxs }] = await Promise.all([
+          supabase.from('contas').select('saldo_inicial').eq('id', contaId).single(),
+          supabase.from('transacoes').select('data, valor, tipo').eq('conta_id', contaId).lte('data', dataFim).order('data'),
+        ])
+        if (todasTxs) {
+          let saldoAcum = Number(contaDados?.saldo_inicial ?? 0)
+          const saldoCalcPorDia: Record<string, number> = {}
+          for (const t of todasTxs) {
+            saldoAcum = Math.round((saldoAcum + (t.tipo === 'credito' ? Number(t.valor) : -Number(t.valor))) * 100) / 100
+            saldoCalcPorDia[t.data] = saldoAcum
+          }
+          for (const { data, saldo } of saldosDia) {
+            const calc = saldoCalcPorDia[data]
+            if (calc !== undefined) {
+              const diferenca = Math.round((calc - Number(saldo)) * 100) / 100
+              if (Math.abs(diferenca) >= 0.01) conciliacao.push({ data, saldo_calculado: calc, saldo_extrato: Number(saldo), diferenca })
+            }
+          }
+        }
+      }
+
       // Período detectado pelas datas das transações (substitui o mês de referência manual)
       const datas = transacoes.map((t) => t.data).sort()
       const periodo = datas.length
         ? { data_inicio: datas[0], data_fim: datas[datas.length - 1], mes_referencia: `${datas[0].slice(0, 7)}-01` }
         : {}
       await supabase.from('extratos').update({ status: 'processado', ...periodo }).eq('id', extrato.id)
-      resultados.push({ arquivo: file.name, extrato_id: extrato.id, transacoes: transacoes.length })
+      resultados.push({
+        arquivo: file.name,
+        extrato_id: extrato.id,
+        transacoes: transacoes.length,
+        ...(conciliacao.length > 0 ? { conciliacao } : {}),
+      })
     }
 
     return NextResponse.json({ resultados })
