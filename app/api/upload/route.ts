@@ -70,38 +70,35 @@ export async function POST(req: NextRequest) {
       }
 
       // ── Filtragem de datas já importadas ─────────────────────────────────────
-      // Usa datas distintas em saldos_extrato para identificar o que já existe,
-      // evitando inflação de contagem por duplicatas anteriores no banco.
-      // Em vez de rejeitar o arquivo inteiro, importa apenas as datas novas
-      // (ex: arquivo Jan–Mar onde Jan e Fev já existem → importa só Março).
+      // Critério de "já importado" usa a tabela transacoes (não saldos_extrato),
+      // pois pode haver datas em saldos_extrato sem transações correspondentes
+      // (upload anterior que falhou no meio). Assim, datas com saldo mas sem
+      // transação são corretamente reimportadas.
+      // saldosDia usa saldos_extrato separadamente para não criar entradas duplas.
       let transacoesParaImportar = transacoes
       let saldosDiaParaImportar = saldosDia
       const datasDoArquivo = [...new Set([...transacoes.map((t) => t.data), ...saldosDia.map((s) => s.data)])]
 
       if (datasDoArquivo.length > 0) {
-        const { data: jaExistem } = await supabase
-          .from('saldos_extrato')
-          .select('data')
-          .eq('conta_id', contaId)
-          .in('data', datasDoArquivo)
-        const datasExistentes = new Set(jaExistem?.map((e) => e.data) ?? [])
+        const [{ data: txExistentes }, { data: saldosExistentes }] = await Promise.all([
+          supabase.from('transacoes').select('data').eq('conta_id', contaId).in('data', datasDoArquivo),
+          supabase.from('saldos_extrato').select('data').eq('conta_id', contaId).in('data', datasDoArquivo),
+        ])
+        const datasComTransacoes = new Set(txExistentes?.map((e) => e.data) ?? [])
+        const datasComSaldos = new Set(saldosExistentes?.map((e) => e.data) ?? [])
 
-        if (datasExistentes.size > 0) {
-          transacoesParaImportar = transacoes.filter((t) => !datasExistentes.has(t.data))
-          saldosDiaParaImportar = saldosDia.filter((s) => !datasExistentes.has(s.data))
+        transacoesParaImportar = transacoes.filter((t) => !datasComTransacoes.has(t.data))
+        saldosDiaParaImportar = saldosDia.filter((s) => !datasComSaldos.has(s.data))
 
-          if (transacoesParaImportar.length === 0 && transacoes.length > 0) {
-            await supabase.from('extratos').update({ status: 'duplicado' }).eq('id', extrato.id)
-            const datasUnicas = [...new Set(transacoes.map((t) => t.data))].sort()
-            const primeiraData = datasUnicas[0]
-            const ultimaData = datasUnicas[datasUnicas.length - 1]
-            resultados.push({
-              arquivo: file.name,
-              aviso: 'duplicado',
-              mensagem: `Extrato já importado — ${transacoes.length} transações extraídas pelo parser (${primeiraData} a ${ultimaData}), todas as datas já existem nesta conta.`,
-            })
-            continue
-          }
+        if (transacoesParaImportar.length === 0 && transacoes.length > 0) {
+          await supabase.from('extratos').update({ status: 'duplicado' }).eq('id', extrato.id)
+          const datasUnicas = [...new Set(transacoes.map((t) => t.data))].sort()
+          resultados.push({
+            arquivo: file.name,
+            aviso: 'duplicado',
+            mensagem: `Extrato já importado — ${transacoes.length} transações extraídas pelo parser (${datasUnicas[0]} a ${datasUnicas.at(-1)}), todas as datas já existem nesta conta.`,
+          })
+          continue
         }
       }
 
