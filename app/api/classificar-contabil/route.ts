@@ -1,14 +1,18 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createSupabaseAdminClient } from '@/lib/supabase'
-import { extrairChave, heuristicaCodigo } from '@/lib/classificador-contabil'
+import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
+import { contraparte, extrairChave, heuristicaCodigo } from '@/lib/classificador-contabil'
 
 // POST { conta_id } — sugere conta contábil e cliente/fornecedor dos lançamentos
 // ainda sem conta, com um grau de confiança (determinístico, pela força do sinal:
 // histórico de contraparte + valor próximo + recorrência; depois regra; depois
-// heurística). A confiança combinada é a MENOR entre conta e cliente.
+// heurística; e, para cliente/fornecedor, casamento de nome com os cadastros).
+// A confiança combinada é a MENOR entre os sinais presentes.
 const round3 = (x: number) => Math.round(x * 1000) / 1000
+const normNome = (s: string) =>
+  s.toLowerCase().normalize('NFD').replace(/[̀-ͯ]/g, '').replace(/\s+/g, ' ').trim()
 
 type HistDet = { contas: Record<string, number>; clientes: Record<string, number>; fornecedores: Record<string, number>; valores: number[]; meses: Set<string> }
+type PessoaIdx = { id: string; nome: string }
 
 function maisFrequente(c: Record<string, number>): { id: string | null; n: number; total: number } {
   let id: string | null = null, n = 0, total = 0
@@ -16,6 +20,17 @@ function maisFrequente(c: Record<string, number>): { id: string | null; n: numbe
   return { id, n, total }
 }
 const valorProximo = (valor: number, valores: number[]) => valores.some((v) => v > 0 && Math.abs(v - valor) / v <= 0.1)
+
+// Casa o nome da contraparte (normalizado) com um cadastro de cliente/fornecedor.
+// Exato → 0.6; um contém o outro → 0.45. Palpite mesmo sem histórico.
+function matchNome(cp: string, idx: PessoaIdx[]): { id: string; conf: number } | null {
+  if (cp.length < 3) return null
+  const exato = idx.find((p) => p.nome === cp)
+  if (exato) return { id: exato.id, conf: 0.6 }
+  const parcial = idx.find((p) => p.nome.length >= 3 && (p.nome.includes(cp) || cp.includes(p.nome)))
+  if (parcial) return { id: parcial.id, conf: 0.45 }
+  return null
+}
 
 export async function POST(req: NextRequest) {
   try {
@@ -36,11 +51,22 @@ export async function POST(req: NextRequest) {
     const idPorCodigo: Record<string, string> = {}
     for (const p of plano ?? []) idPorCodigo[p.codigo] = p.id
 
-    // Histórico detalhado por contraparte (de TODOS os lançamentos já atribuídos)
-    const { data: hist } = await supabase
-      .from('transacoes')
-      .select('descricao, data, valor, conta_contabil_id, cliente_id, fornecedor_id')
-      .or('conta_contabil_id.not.is.null,cliente_id.not.is.null,fornecedor_id.not.is.null')
+    // Cadastros de clientes/fornecedores, para casar por nome (palpite sem histórico)
+    const [{ data: clientesRaw }, { data: fornecedoresRaw }] = await Promise.all([
+      supabase.from('clientes').select('id, nome'),
+      supabase.from('fornecedores').select('id, nome'),
+    ])
+    const idxClientes: PessoaIdx[] = (clientesRaw ?? []).map((c) => ({ id: c.id as string, nome: normNome(c.nome as string) }))
+    const idxFornecedores: PessoaIdx[] = (fornecedoresRaw ?? []).map((c) => ({ id: c.id as string, nome: normNome(c.nome as string) }))
+
+    // Histórico detalhado por contraparte (de TODOS os lançamentos já atribuídos).
+    // Paginado: o teto de 1000 linhas truncaria o histórico em contas grandes.
+    const hist = await selectAll<{ descricao: string; data: string; valor: number; conta_contabil_id: string | null; cliente_id: string | null; fornecedor_id: string | null }>(
+      () => supabase
+        .from('transacoes')
+        .select('descricao, data, valor, conta_contabil_id, cliente_id, fornecedor_id')
+        .or('conta_contabil_id.not.is.null,cliente_id.not.is.null,fornecedor_id.not.is.null')
+    )
     const det: Record<string, HistDet> = {}
     for (const t of hist ?? []) {
       const k = extrairChave(t.descricao)
@@ -74,8 +100,7 @@ export async function POST(req: NextRequest) {
         if (h!.meses.size >= 3) contaConf += 0.04
       } else if (regras[chave]) { contaId = regras[chave]; contaConf = 0.85 }
       else { const cod = heuristicaCodigo(t.descricao, t.tipo); if (cod && idPorCodigo[cod]) { contaId = idPorCodigo[cod]; contaConf = 0.55 } }
-      if (!contaId) continue // sem sinal suficiente: deixa para o usuário
-      contaConf = Math.min(0.99, contaConf)
+      if (contaId) contaConf = Math.min(0.99, contaConf)
 
       // ---- Cliente / Fornecedor ----
       let clienteId: string | null = null, fornecedorId: string | null = null, pessoaConf: number | null = null
@@ -89,12 +114,30 @@ export async function POST(req: NextRequest) {
         if (rp.cliente_id) { clienteId = rp.cliente_id; pessoaConf = 0.85 }
         else if (rp.fornecedor_id) { fornecedorId = rp.fornecedor_id; pessoaConf = 0.85 }
       }
+      // Fallback: casa o nome da contraparte com os cadastros (palpite mesmo sem
+      // histórico). Crédito tende a cliente; débito tende a fornecedor — mas tenta
+      // os dois. Melhor uma sugestão de ~45-60% para revisão do que deixar vazio.
+      if (!clienteId && !fornecedorId) {
+        const cpNorm = normNome(contraparte(t.descricao))
+        const ordem: ['cliente' | 'fornecedor', PessoaIdx[]][] = t.tipo === 'credito'
+          ? [['cliente', idxClientes], ['fornecedor', idxFornecedores]]
+          : [['fornecedor', idxFornecedores], ['cliente', idxClientes]]
+        for (const [tipoP, idx] of ordem) {
+          const m = matchNome(cpNorm, idx)
+          if (m) { if (tipoP === 'cliente') clienteId = m.id; else fornecedorId = m.id; pessoaConf = m.conf; break }
+        }
+      }
       if (pessoaConf !== null) pessoaConf = Math.min(0.99, pessoaConf)
 
-      // Confiança combinada = a MENOR entre conta e cliente (quando há cliente)
-      const confianca = pessoaConf !== null ? Math.min(contaConf, pessoaConf) : contaConf
+      // Sem nenhum sinal (nem conta nem pessoa): deixa para o usuário
+      if (!contaId && !clienteId && !fornecedorId) continue
 
-      const update: Record<string, unknown> = { conta_contabil_id: contaId, confianca: round3(confianca) }
+      // Confiança combinada = a MENOR entre os sinais presentes
+      const confs = [contaId ? contaConf : null, pessoaConf].filter((x): x is number => x !== null)
+      const confianca = confs.length ? Math.min(...confs) : 0.4
+
+      const update: Record<string, unknown> = { confianca: round3(confianca) }
+      if (contaId) update.conta_contabil_id = contaId
       if (clienteId) { update.cliente_id = clienteId; pessoas++ }
       else if (fornecedorId) { update.fornecedor_id = fornecedorId; pessoas++ }
       await supabase.from('transacoes').update(update).eq('id', t.id)
