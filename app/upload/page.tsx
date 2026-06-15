@@ -13,6 +13,8 @@ type UploadResult = {
 type Documento = {
   id: string
   mes_referencia: string
+  data_inicio: string | null
+  data_fim: string | null
   status: string
   created_at: string
   conta_nome: string | null
@@ -23,6 +25,8 @@ type Documento = {
 
 type UploadState = 'idle' | 'uploading' | 'classificando' | 'done' | 'error'
 
+const fmtData = (s: string) => { const [a, m, d] = s.split('-'); return `${d}/${m}/${a}` }
+
 export default function UploadPage() {
   const router = useRouter()
   const fileInputRef = useRef<HTMLInputElement>(null)
@@ -30,7 +34,6 @@ export default function UploadPage() {
   const [files, setFiles] = useState<File[]>([])
   const [contas, setContas] = useState<{ id: string; nome: string; banco: string; tipo: string }[]>([])
   const [contaId, setContaId] = useState('')
-  const [mesReferencia, setMesReferencia] = useState('')
   const [state, setState] = useState<UploadState>('idle')
   const [resultados, setResultados] = useState<UploadResult[]>([])
   const [dragging, setDragging] = useState(false)
@@ -76,7 +79,6 @@ export default function UploadPage() {
     try {
       const formData = new FormData()
       formData.append('conta_id', contaId)
-      if (mesReferencia) formData.append('mes_referencia', mesReferencia)
       files.forEach((f) => formData.append('files', f))
 
       const uploadRes = await fetch('/api/upload', { method: 'POST', body: formData })
@@ -128,30 +130,20 @@ export default function UploadPage() {
               <a href="/contas/gerenciar" className="text-slate-800 font-medium underline">Cadastre uma conta</a> antes de enviar o extrato.
             </p>
           ) : (
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm font-medium text-slate-600 mb-1">Conta</label>
-                <select
-                  value={contaId}
-                  onChange={(e) => setContaId(e.target.value)}
-                  required
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
-                >
-                  <option value="">Selecione a conta…</option>
-                  {contas.map((c) => (
-                    <option key={c.id} value={c.id}>{c.tipo === 'cartao' ? '💳' : c.tipo === 'emprestimo' ? '💰' : '🏦'} {c.nome} · {c.banco}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-slate-600 mb-1">Mês de referência <span className="text-slate-400 font-normal">(opcional)</span></label>
-                <input
-                  type="month"
-                  value={mesReferencia}
-                  onChange={(e) => setMesReferencia(e.target.value)}
-                  className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
-                />
-              </div>
+            <div>
+              <label className="block text-sm font-medium text-slate-600 mb-1">Conta</label>
+              <select
+                value={contaId}
+                onChange={(e) => setContaId(e.target.value)}
+                required
+                className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500"
+              >
+                <option value="">Selecione a conta…</option>
+                {contas.map((c) => (
+                  <option key={c.id} value={c.id}>{c.tipo === 'cartao' ? '💳' : c.tipo === 'emprestimo' ? '💰' : '🏦'} {c.nome} · {c.banco}</option>
+                ))}
+              </select>
+              <p className="text-xs text-slate-400 mt-1">O período é detectado automaticamente pelas datas do extrato.</p>
             </div>
           )}
         </div>
@@ -272,7 +264,9 @@ export default function UploadPage() {
                     {d.conta_nome ?? 'Conta'} <span className="text-slate-400 font-normal">· {d.conta_banco}</span>
                   </p>
                   <p className="text-xs text-slate-400">
-                    {d.mes_referencia?.slice(0, 7)} · {d.transacoes} transação(ões)
+                    {d.data_inicio && d.data_fim
+                      ? `${fmtData(d.data_inicio)} – ${fmtData(d.data_fim)}`
+                      : d.mes_referencia?.slice(0, 7)} · {d.transacoes} transação(ões)
                   </p>
                 </div>
                 <a

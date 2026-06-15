@@ -12,9 +12,8 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData()
     const files = formData.getAll('files') as File[]
     const contaId = formData.get('conta_id') as string
-    // Mês de referência é opcional (a DRE usa a data real das transações).
-    // Quando ausente, usa o mês atual apenas como rótulo do documento.
-    const mesReferencia = (formData.get('mes_referencia') as string) || new Date().toISOString().slice(0, 7)
+    // Período é detectado pelas datas do próprio extrato (definido após o parse).
+    const hojeMes = new Date().toISOString().slice(0, 7)
 
     if (!files.length || !contaId) {
       return NextResponse.json({ error: 'Campos obrigatórios ausentes' }, { status: 400 })
@@ -28,16 +27,16 @@ export async function POST(req: NextRequest) {
       const ext = file.name.split('.').pop()?.toLowerCase()
 
       // Upload para Vercel Blob (addRandomSuffix evita conflito ao reenviar o mesmo arquivo)
-      const blob = await put(`extratos/${contaId}/${mesReferencia}/${file.name}`, buffer, {
+      const blob = await put(`extratos/${contaId}/${hojeMes}/${file.name}`, buffer, {
         access: 'private',
         contentType: file.type,
         addRandomSuffix: true,
       })
 
-      // Cria registro do extrato
+      // Cria registro do extrato (mes_referencia provisório; ajustado após o parse)
       const { data: extrato, error: extratoErr } = await supabase
         .from('extratos')
-        .insert({ conta_id: contaId, mes_referencia: `${mesReferencia}-01`, arquivo_url: blob.url, status: 'processando' })
+        .insert({ conta_id: contaId, mes_referencia: `${hojeMes}-01`, arquivo_url: blob.url, status: 'processando' })
         .select()
         .single()
 
@@ -82,22 +81,25 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // PDF: grava saldo inicial (1º extrato) e saldos diários do documento.
+      // Saldo inicial (1º extrato) e saldos diários do documento (PDF e Excel).
       // Em try/catch para não falhar o upload caso a migração de saldo ainda não exista.
-      if (ext === 'pdf') {
-        try {
-          if (saldoInicial !== null) {
-            await supabase.from('contas').update({ saldo_inicial: saldoInicial }).eq('id', contaId).eq('saldo_inicial', 0)
-          }
-          if (saldosDia.length > 0) {
-            await supabase.from('saldos_extrato').insert(
-              saldosDia.map((s) => ({ extrato_id: extrato.id, conta_id: contaId, data: s.data, saldo: s.saldo }))
-            )
-          }
-        } catch { /* ignora: feature de saldo depende de migração */ }
-      }
+      try {
+        if (saldoInicial !== null) {
+          await supabase.from('contas').update({ saldo_inicial: saldoInicial }).eq('id', contaId).eq('saldo_inicial', 0)
+        }
+        if (saldosDia.length > 0) {
+          await supabase.from('saldos_extrato').insert(
+            saldosDia.map((s) => ({ extrato_id: extrato.id, conta_id: contaId, data: s.data, saldo: s.saldo }))
+          )
+        }
+      } catch { /* ignora: feature de saldo depende de migração */ }
 
-      await supabase.from('extratos').update({ status: 'processado' }).eq('id', extrato.id)
+      // Período detectado pelas datas das transações (substitui o mês de referência manual)
+      const datas = transacoes.map((t) => t.data).sort()
+      const periodo = datas.length
+        ? { data_inicio: datas[0], data_fim: datas[datas.length - 1], mes_referencia: `${datas[0].slice(0, 7)}-01` }
+        : {}
+      await supabase.from('extratos').update({ status: 'processado', ...periodo }).eq('id', extrato.id)
       resultados.push({ arquivo: file.name, extrato_id: extrato.id, transacoes: transacoes.length })
     }
 

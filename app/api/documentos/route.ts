@@ -7,7 +7,7 @@ export async function GET() {
     const supabase = createSupabaseAdminClient()
     const { data, error } = await supabase
       .from('extratos')
-      .select('id, mes_referencia, arquivo_url, status, created_at, contas(nome, banco, tipo), transacoes(count)')
+      .select('id, mes_referencia, data_inicio, data_fim, arquivo_url, status, created_at, contas(nome, banco, tipo), transacoes(count)')
       .order('created_at', { ascending: false })
       .limit(100)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
@@ -16,6 +16,8 @@ export async function GET() {
     const documentos = (data ?? []).map((e: any) => ({
       id: e.id,
       mes_referencia: e.mes_referencia,
+      data_inicio: e.data_inicio,
+      data_fim: e.data_fim,
       arquivo_url: e.arquivo_url,
       status: e.status,
       created_at: e.created_at,
