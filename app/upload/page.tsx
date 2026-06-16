@@ -66,8 +66,8 @@ export default function UploadPage() {
     if (!newFiles) return
     const valid = Array.from(newFiles).filter((f) =>
       ['application/pdf', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
-       'application/vnd.ms-excel'].includes(f.type) ||
-      f.name.endsWith('.xlsx') || f.name.endsWith('.xls') || f.name.endsWith('.pdf')
+       'application/vnd.ms-excel', 'text/csv'].includes(f.type) ||
+      f.name.endsWith('.xlsx') || f.name.endsWith('.xls') || f.name.endsWith('.pdf') || f.name.endsWith('.csv')
     )
     setFiles((prev) => [...prev, ...valid])
   }, [])
@@ -173,13 +173,13 @@ export default function UploadPage() {
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".pdf,.xlsx,.xls"
+            accept=".pdf,.xlsx,.xls,.csv"
             onChange={(e) => addFiles(e.target.files)}
             className="hidden"
           />
           <div className="text-4xl mb-3">📂</div>
           <p className="font-medium text-slate-700">Arraste arquivos aqui ou clique para selecionar</p>
-          <p className="text-sm text-slate-400 mt-1">PDF ou Excel (.xlsx, .xls) — múltiplos arquivos permitidos</p>
+          <p className="text-sm text-slate-400 mt-1">PDF, Excel (.xlsx, .xls) ou QuickBooks (.xls/.csv) — múltiplos arquivos permitidos</p>
         </div>
 
         {/* Lista de arquivos selecionados */}

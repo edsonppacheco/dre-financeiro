@@ -3,6 +3,7 @@ import { put } from '@vercel/blob'
 import { createSupabaseAdminClient } from '@/lib/supabase'
 import { excelParaTexto } from '@/lib/parsers/excel'
 import { parsePDF, parseTextoExtrato } from '@/lib/parsers/pdf'
+import { ehArquivoQBO, parseQBO, mapearCategoriaQBO } from '@/lib/parsers/qbo'
 
 // Extração por IA de extratos grandes pode demorar; amplia o limite de duração.
 export const maxDuration = 300
@@ -45,8 +46,9 @@ export async function POST(req: NextRequest) {
         continue
       }
 
-      // Parseia o arquivo
-      let transacoes: { data: string; descricao: string; valor: number; tipo: string }[] = []
+      // Parseia o arquivo. transacoes pode carregar conta_contabil_id/confianca
+      // quando a fonte já traz a categoria (ex: coluna Account do QuickBooks).
+      let transacoes: { data: string; descricao: string; valor: number; tipo: string; conta_contabil_id?: string | null; confianca?: number }[] = []
       let saldoInicial: number | null = null
       let saldosDia: { data: string; saldo: number }[] = []
       try {
@@ -55,6 +57,23 @@ export async function POST(req: NextRequest) {
           transacoes = r.transacoes
           saldoInicial = r.saldoInicial
           saldosDia = r.saldosDia
+        } else if (['xlsx', 'xls', 'csv'].includes(ext ?? '') && ehArquivoQBO(buffer)) {
+          // Extrato do QuickBooks (Account Register): parser determinístico, sinais
+          // explícitos (Payment/Deposit), e categoria do QBO -> plano de contas.
+          const r = parseQBO(buffer)
+          saldoInicial = r.saldoInicial
+          saldosDia = r.saldosDia
+          const { data: plano } = await supabase.from('plano_contas').select('id, codigo')
+          const idPorCodigo: Record<string, string> = {}
+          for (const p of plano ?? []) idPorCodigo[p.codigo] = p.id
+          transacoes = r.transacoes.map((t) => {
+            const codigo = mapearCategoriaQBO(t.categoriaQBO, t.tipo)
+            const ccId = codigo ? idPorCodigo[codigo] : undefined
+            return {
+              data: t.data, descricao: t.descricao, valor: t.valor, tipo: t.tipo,
+              ...(ccId ? { conta_contabil_id: ccId, confianca: 0.5 } : {}),
+            }
+          })
         } else if (['xlsx', 'xls'].includes(ext ?? '')) {
           const r = await parseTextoExtrato(await excelParaTexto(buffer))
           transacoes = r.transacoes
