@@ -77,11 +77,27 @@ export async function obterTaxasMensais(meses: string[]): Promise<Record<string,
   return mapa
 }
 
+/**
+ * Resolve a taxa do mês pedido; se faltar (ex: mês corrente ainda não buscado,
+ * ou fim de período no futuro), usa a do mês disponível mais próximo — preferindo
+ * o mais recente que seja <= mes (a cotação "vigente" naquele ponto); se não
+ * houver nenhum anterior, usa o mais antigo disponível. Evita o erro grave de
+ * devolver o valor sem converter (que misturaria BRL e USD como 1:1).
+ */
+export function resolverTaxa(mes: string, taxas: Record<string, number>): number | null {
+  const exata = taxas[mes]
+  if (exata != null) return exata
+  const meses = Object.keys(taxas).sort()
+  if (!meses.length) return null
+  const anteriores = meses.filter((m) => m <= mes)
+  return anteriores.length ? taxas[anteriores[anteriores.length - 1]] : taxas[meses[0]]
+}
+
 /** Conversão síncrona usando um mapa de taxas já carregado (mes -> taxa USD→BRL). */
 export function converterComTaxas(valor: number, de: Moeda, para: Moeda, mes: string, taxas: Record<string, number>): number {
   if (de === para) return valor
-  const taxa = taxas[mes]
-  if (!taxa) return valor // sem taxa disponível: mantém o valor original em vez de quebrar a conta
+  const taxa = resolverTaxa(mes, taxas)
+  if (!taxa) return valor // nenhuma taxa disponível em todo o mapa: não há como converter
   const v = de === 'USD' ? valor * taxa : valor / taxa
   return Math.round(v * 100) / 100
 }

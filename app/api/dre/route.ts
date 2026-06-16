@@ -102,6 +102,9 @@ export async function GET(req: NextRequest) {
     for (const col of colunas) mesesEnvolvidos.add(col.fim.slice(0, 7))
     const mesMaisAntigo = todasDatas.length ? [...todasDatas].sort()[0].slice(0, 7) : rangeIni.slice(0, 7)
     mesesEnvolvidos.add(mesMaisAntigo)
+    // Mês corrente: a cotação atual serve de fallback p/ saldo do período em
+    // andamento, cujo fim (ex: dez do ano corrente) ainda não tem taxa.
+    mesesEnvolvidos.add(new Date().toISOString().slice(0, 7))
     const taxas = combinada ? await obterTaxasMensais([...mesesEnvolvidos]) : {}
     const conv = (valor: number, deMoeda: Moeda, mes: string) => combinada ? converterComTaxas(valor, deMoeda, moeda, mes, taxas) : valor
 

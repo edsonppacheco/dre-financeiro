@@ -51,11 +51,13 @@ export async function GET(req: NextRequest) {
     const combinada = moedasEmUso.size > 1
     const moeda: Moeda = combinada ? moedaParam : ((Object.values(moedaPorConta)[0] as Moeda) ?? 'BRL')
 
-    // Taxas dos meses envolvidos (transações + mês mais recente, para os saldos)
+    // Taxas dos meses envolvidos (cada transação pelo seu mês) + mês corrente,
+    // cuja taxa é a "cotação atual" usada para converter os saldos.
+    const mesAtual = new Date().toISOString().slice(0, 7)
     let ultima: string | null = null
     for (const t of txFiltradas) if (!ultima || (t.data as string) > ultima) ultima = t.data as string
     const mesesEnvolvidos = Array.from(new Set(txFiltradas.map((t) => (t.data as string).slice(0, 7))))
-    if (ultima) mesesEnvolvidos.push(ultima.slice(0, 7))
+    mesesEnvolvidos.push(mesAtual)
     const taxas = combinada ? await obterTaxasMensais(mesesEnvolvidos) : {}
     const conv = (valor: number, deMoeda: Moeda, mes: string) => combinada ? converterComTaxas(valor, deMoeda, moeda, mes, taxas) : valor
 
@@ -81,10 +83,12 @@ export async function GET(req: NextRequest) {
     }
     const rd = (m: string): RD => porMes[m] ?? { receita: 0, despesa: 0 }
 
-    const mesSaldo = ultima ? ultima.slice(0, 7) : new Date().toISOString().slice(0, 7)
+    // Saldos = posição atual → convertidos pela cotação atual (mês corrente).
+    // O resolverTaxa cai para a taxa disponível mais recente se o mês corrente
+    // ainda não tiver cotação registrada.
     const contas = contasFiltradas.map((c) => ({
       nome: c.nome, tipo: c.tipo,
-      saldo: round(conv(saldoNativo[c.id] ?? 0, moedaPorConta[c.id], mesSaldo)),
+      saldo: round(conv(saldoNativo[c.id] ?? 0, moedaPorConta[c.id], mesAtual)),
     }))
     const saldoTotal = round(contas.filter((c) => c.tipo === 'corrente').reduce((s, c) => s + c.saldo, 0))
     const dividasLongoPrazo = round(contas.filter((c) => c.tipo === 'emprestimo').reduce((s, c) => s + c.saldo, 0))
