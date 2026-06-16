@@ -7,7 +7,7 @@ import { fmtMoeda, type Moeda } from '@/lib/formato'
 type Coluna = { chave: string; label: string }
 type LinhaCalc = { codigo: string; nome: string; tipo: string; nivel: number; valores: Record<string, number> }
 type Visao = 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes' | 'anos'
-type BalancoCol = { contasCorrentes: number; cartoes: number; emprestimos: number; capitalInicial: number; lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number; totalAtivos: number; totalPassivosPL: number }
+type BalancoCol = { contasCorrentes: number; cartoes: number; emprestimos: number; capitalInicial: number; lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number; ajusteCambial: number; totalAtivos: number; totalPassivosPL: number }
 type SerieCol = { distribuicaoMes: number; recebimentoEmprestimos: number; pagamentoEmprestimos: number }
 type TransfRef = { data: string; contaOrigem: string; contaDestino: string; valorOrigem: number; moedaOrigem: Moeda; valorDestino: number; moedaDestino: Moeda }
 
@@ -96,7 +96,7 @@ export default function RelatoriosPage() {
     if (f === 'lucrosRetidos') return balanco[primeira]?.lucrosRetidos ?? 0
     if (f === 'totalPassivosPL') {
       const b = balanco[ultima]
-      return -(b?.emprestimos ?? 0) - (b?.cartoes ?? 0) + (b?.capitalInicial ?? 0) + somaCols((kk) => balanco[kk]?.lucroLiquido ?? 0) + (balanco[primeira]?.lucrosRetidos ?? 0) - (b?.lucrosDistribuidos ?? 0)
+      return -(b?.emprestimos ?? 0) - (b?.cartoes ?? 0) + (b?.capitalInicial ?? 0) + somaCols((kk) => balanco[kk]?.lucroLiquido ?? 0) + (balanco[primeira]?.lucrosRetidos ?? 0) - (b?.lucrosDistribuidos ?? 0) + (b?.ajusteCambial ?? 0)
     }
     return balanco[ultima]?.[f] ?? 0 // contasCorrentes, cartoes, emprestimos, capitalInicial, lucrosDistribuidos, totalAtivos
   }
@@ -213,6 +213,9 @@ export default function RelatoriosPage() {
               <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">Lucro líquido (período)</td>{cols.map((c) => { const v = valBal('lucroLiquido', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${cellCls(v)}`}>{num(v)}</td> })}</tr>
               <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">Lucros retidos (acumulado)</td>{cols.map((c) => { const v = valBal('lucrosRetidos', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${cellCls(v)}`}>{num(v)}</td> })}</tr>
               <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8">(−) Lucros distribuídos (acumulado)</td>{cols.map((c) => { const v = valBal('lucrosDistribuidos', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${v > 0 ? 'text-red-600' : 'text-slate-300'}`}>{v === 0 ? '—' : '-' + fmt(v)}</td> })}</tr>
+              {combinada && (
+                <tr className="border-b border-slate-100 text-slate-600"><td className="px-4 py-2.5 pl-8" title="Diferença de conversão das moedas (saldos a câmbio de fechamento; fluxos a câmbio do mês). Vai no patrimônio, não no resultado.">Ajuste de conversão cambial</td>{cols.map((c) => { const v = valBal('ajusteCambial', c.chave); return <td key={c.chave} className={`${tdCls(c.chave)} ${cellCls(v)}`}>{num(v)}</td> })}</tr>
+              )}
               <tr className="border-b border-slate-200 font-semibold text-slate-800"><td className="px-4 py-2.5">Total passivos + patrimônio</td>{cols.map((c) => { const v = valBal('totalPassivosPL', c.chave); const ok = Math.abs(v - valBal('totalAtivos', c.chave)) < 0.01; return <td key={c.chave} className={`${tdCls(c.chave)} ${ok ? '' : 'text-amber-600'}`} title={ok ? 'Confere com o ativo' : 'Difere do ativo'}>{fmt(v)}</td> })}</tr>
             </tbody>
           </table>

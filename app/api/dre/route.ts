@@ -142,7 +142,7 @@ export async function GET(req: NextRequest) {
 
     const balanco: Record<string, {
       contasCorrentes: number; cartoes: number; emprestimos: number; capitalInicial: number
-      lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number
+      lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number; ajusteCambial: number
       totalAtivos: number; totalPassivosPL: number
     }> = {}
     const serie: Record<string, { distribuicaoMes: number; recebimentoEmprestimos: number; pagamentoEmprestimos: number }> = {}
@@ -182,11 +182,17 @@ export async function GET(req: NextRequest) {
       const lucroPeriodo = lucroLiquido[col.chave]
       const totalAtivos = round(corr)
       // Passivos (dívidas = -saldo de empréstimo/cartão) + Patrimônio (capital + lucros - distribuídos)
-      const totalPassivosPL = round(-empr - cart + capitalInicial + lucroPeriodo + retido - distribAcum)
+      const passivosPLsemAjuste = -empr - cart + capitalInicial + lucroPeriodo + retido - distribAcum
+      // Ajuste de conversão acumulado (CTA): só na visão combinada (multi-moeda),
+      // os saldos são convertidos pela taxa de fechamento e os fluxos pela taxa
+      // do mês, então a diferença é translação cambial. Vai no PL (não no lucro),
+      // como manda a norma p/ diferença de conversão, e faz o balanço fechar.
+      const ajusteCambial = combinada ? round(totalAtivos - passivosPLsemAjuste) : 0
+      const totalPassivosPL = round(passivosPLsemAjuste + ajusteCambial)
       balanco[col.chave] = {
         contasCorrentes: round(corr), cartoes: round(cart), emprestimos: round(empr), capitalInicial,
         lucroLiquido: lucroPeriodo, lucrosDistribuidos: round(distribAcum), lucrosRetidos: round(retido),
-        totalAtivos, totalPassivosPL,
+        ajusteCambial, totalAtivos, totalPassivosPL,
       }
       serie[col.chave] = { distribuicaoMes: round(distribMes), recebimentoEmprestimos: round(receb), pagamentoEmprestimos: round(pag) }
     }
