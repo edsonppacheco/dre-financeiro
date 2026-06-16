@@ -1,12 +1,17 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useEmpresas } from './_components/EmpresaProvider'
+import { fmtMoeda, type Moeda } from '@/lib/formato'
 
 type Conta = { nome: string; tipo: string; saldo: number }
 type MesData = { label: string; receita: number; despesa: number }
 type Ytd = { label: string; receita: number; despesa: number; lucro: number }
 type Ponto = { label: string; receita: number; despesa: number; lucro: number }
+type TransfRef = { data: string; contaOrigem: string; contaDestino: string; valorOrigem: number; moedaOrigem: Moeda; valorDestino: number; moedaDestino: Moeda }
 type Dash = {
+  moeda: Moeda
+  combinada: boolean
   ultimaAtualizacao: string | null
   contas: Conta[]
   saldoTotal: number
@@ -17,9 +22,9 @@ type Dash = {
   mesAnterior: MesData
   ytd: { atual: Ytd; anterior: Ytd }
   pontos: Ponto[]
+  transferenciasReferencia: TransfRef[]
 }
 
-const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const fmtData = (s: string) => { const [a, m, d] = s.split('-'); return `${d}/${m}/${a}` }
 const pct = (atual: number, base: number) => base === 0 ? null : ((atual - base) / Math.abs(base)) * 100
 
@@ -82,26 +87,34 @@ function Grafico({ pontos }: { pontos: Ponto[] }) {
 }
 
 export default function PainelPage() {
+  const { selecionadas, combinada: empresasCombinadas, moedaCombinada } = useEmpresas()
   const [d, setD] = useState<Dash | null>(null)
   const [visao, setVisao] = useState('mes')
   const [erro, setErro] = useState<string | null>(null)
 
   const carregar = useCallback((v: string) => {
-    fetch(`/api/dashboard?visao=${v}`).then((r) => r.json()).then((x) => { if (x.error) throw new Error(x.error); setD(x) }).catch((e) => setErro(e.message))
-  }, [])
+    const qs = new URLSearchParams({ visao: v })
+    if (selecionadas.length) qs.set('empresas', selecionadas.join(','))
+    if (empresasCombinadas) qs.set('moeda', moedaCombinada)
+    fetch(`/api/dashboard?${qs}`).then((r) => r.json()).then((x) => { if (x.error) throw new Error(x.error); setD(x) }).catch((e) => setErro(e.message))
+  }, [selecionadas, empresasCombinadas, moedaCombinada])
   useEffect(() => { carregar(visao) }, [visao, carregar])
 
   if (erro) return <div className="bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">{erro}</div>
   if (!d) return <div className="animate-pulse space-y-4"><div className="h-8 w-48 bg-slate-200 rounded" /><div className="grid grid-cols-3 gap-4">{[0, 1, 2].map((i) => <div key={i} className="h-28 bg-slate-100 rounded-xl" />)}</div></div>
 
   const ll = (y: Ytd) => y.receita - y.despesa
+  const fmt = (v: number) => fmtMoeda(v, d.moeda)
 
   return (
     <div>
       <div className="mb-6 flex items-end justify-between">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Painel</h1>
-          <p className="text-slate-500 mt-1">Visão geral das finanças</p>
+          <p className="text-slate-500 mt-1">
+            Visão geral das finanças
+            {d.combinada && <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">Combinada · convertido para {d.moeda}</span>}
+          </p>
         </div>
         <p className="text-xs text-slate-400">Última atualização: {d.ultimaAtualizacao ? fmtData(d.ultimaAtualizacao) : '—'}</p>
       </div>
@@ -161,6 +174,25 @@ export default function PainelPage() {
           })}
         </div>
       </div>
+
+      {/* Transferências entre empresas — referência, não entram em receita/despesa */}
+      {d.combinada && d.transferenciasReferencia.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden mb-4">
+          <div className="px-4 py-2.5 border-b border-slate-100 text-xs font-medium text-slate-500 uppercase tracking-wide">
+            Movimentações entre empresas <span className="font-normal">(referência — não contam como receita/despesa)</span>
+          </div>
+          <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
+            {d.transferenciasReferencia.map((t, i) => (
+              <div key={i} className="flex items-center justify-between px-4 py-2 text-sm">
+                <span className="text-slate-600">{fmtData(t.data)} · {t.contaOrigem} → {t.contaDestino}</span>
+                <span className="text-slate-500 tabular-nums">
+                  {fmtMoeda(t.valorOrigem, t.moedaOrigem)} → {fmtMoeda(t.valorDestino, t.moedaDestino)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Gráfico de evolução */}
       <div className="bg-white rounded-xl border border-slate-200 p-5">

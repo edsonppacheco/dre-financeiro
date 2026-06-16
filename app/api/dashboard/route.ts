@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
+import { obterTaxasMensais, converterComTaxas } from '@/lib/cambio'
+import type { Moeda } from '@/lib/formato'
 
 const round = (x: number) => Math.round(x * 100) / 100
 const mesStr = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
@@ -8,14 +10,23 @@ const rotuloMes = (m: string) => { const [a, mm] = m.split('-'); return `${NOMES
 
 type RD = { receita: number; despesa: number }
 
+// GET /api/dashboard?visao=...&empresas=id1,id2&moeda=USD|BRL
+// `empresas` filtra as contas exibidas (vazio = todas). Quando há 2+ empresas
+// (ou moedas) na visão, os valores são convertidos para `moeda` usando a média
+// mensal do câmbio do mês de cada transação (saldos, que são um instantâneo,
+// usam a taxa do mês mais recente com dados).
 export async function GET(req: NextRequest) {
   try {
     const supabase = createSupabaseAdminClient()
-    const visao = new URL(req.url).searchParams.get('visao') ?? 'mes'
+    const { searchParams } = new URL(req.url)
+    const visao = searchParams.get('visao') ?? 'mes'
+    const empresaIds = (searchParams.get('empresas') ?? '').split(',').filter(Boolean)
+    const moedaParam = (searchParams.get('moeda') as Moeda) === 'USD' ? 'USD' : 'BRL'
 
-    const [{ data: contasRaw }, { data: planoRaw }, txAll] = await Promise.all([
-      supabase.from('contas').select('id, nome, tipo, saldo_inicial'),
+    const [{ data: contasRaw }, { data: planoRaw }, { data: empresasRaw }, txAll] = await Promise.all([
+      supabase.from('contas').select('id, nome, tipo, saldo_inicial, empresa_id'),
       supabase.from('plano_contas').select('id, tipo'),
+      supabase.from('empresas').select('id, moeda'),
       selectAll<{ conta_id: string; data: string; valor: number; tipo: string; conta_contabil_id: string | null }>(
         () => supabase.from('transacoes').select('conta_id, data, valor, tipo, conta_contabil_id')
       ),
@@ -23,20 +34,46 @@ export async function GET(req: NextRequest) {
 
     const tipoCC: Record<string, string> = {}
     for (const p of planoRaw ?? []) tipoCC[p.id] = p.tipo
+    const moedaEmpresa: Record<string, Moeda> = {}
+    for (const e of empresasRaw ?? []) moedaEmpresa[e.id as string] = (e.moeda as Moeda) ?? 'BRL'
 
-    // Saldos por conta + última atualização + mapa mensal de receita/despesa
-    const saldo: Record<string, number> = {}
-    for (const c of contasRaw ?? []) saldo[c.id] = Number(c.saldo_inicial ?? 0)
+    // Filtra contas pelas empresas selecionadas (vazio = todas)
+    const contasFiltradas = (contasRaw ?? []).filter((c) => !empresaIds.length || empresaIds.includes(c.empresa_id ?? ''))
+    const contaIds = new Set(contasFiltradas.map((c) => c.id))
+    const moedaPorConta: Record<string, Moeda> = {}
+    for (const c of contasFiltradas) moedaPorConta[c.id] = moedaEmpresa[c.empresa_id ?? ''] ?? 'BRL'
+
+    const txFiltradas = (txAll ?? []).filter((t) => contaIds.has(t.conta_id))
+
+    // Moeda final da visão: se só há uma moeda entre as contas em vista, usa-a
+    // direto (sem conversão); senão usa a escolhida pelo usuário (default USD).
+    const moedasEmUso = new Set(Object.values(moedaPorConta))
+    const combinada = moedasEmUso.size > 1
+    const moeda: Moeda = combinada ? moedaParam : ((Object.values(moedaPorConta)[0] as Moeda) ?? 'BRL')
+
+    // Taxas dos meses envolvidos (transações + mês mais recente, para os saldos)
     let ultima: string | null = null
+    for (const t of txFiltradas) if (!ultima || (t.data as string) > ultima) ultima = t.data as string
+    const mesesEnvolvidos = Array.from(new Set(txFiltradas.map((t) => (t.data as string).slice(0, 7))))
+    if (ultima) mesesEnvolvidos.push(ultima.slice(0, 7))
+    const taxas = combinada ? await obterTaxasMensais(mesesEnvolvidos) : {}
+    const conv = (valor: number, deMoeda: Moeda, mes: string) => combinada ? converterComTaxas(valor, deMoeda, moeda, mes, taxas) : valor
+
+    // Saldos por conta (acumulados na moeda nativa, convertidos só no final) +
+    // mapa mensal de receita/despesa (cada transação convertida pela taxa do
+    // seu próprio mês — tratamento mês a mês, mais preciso que uma taxa única).
+    const saldoNativo: Record<string, number> = {}
+    for (const c of contasFiltradas) saldoNativo[c.id] = Number(c.saldo_inicial ?? 0)
     const porMes: Record<string, RD> = {}
-    for (const t of txAll ?? []) {
-      const v = Number(t.valor)
-      saldo[t.conta_id as string] = (saldo[t.conta_id as string] ?? 0) + (t.tipo === 'credito' ? v : -v)
+    for (const t of txFiltradas) {
+      const vNativo = Number(t.valor)
+      const cid = t.conta_id as string
+      saldoNativo[cid] = (saldoNativo[cid] ?? 0) + (t.tipo === 'credito' ? vNativo : -vNativo)
       const d = t.data as string
-      if (!ultima || d > ultima) ultima = d
       const tc = t.conta_contabil_id ? tipoCC[t.conta_contabil_id as string] : null
       if (tc === 'receita' || tc === 'despesa' || tc === 'imposto') {
         const m = d.slice(0, 7)
+        const v = conv(vNativo, moedaPorConta[cid], m)
         porMes[m] ??= { receita: 0, despesa: 0 }
         if (tc === 'receita') porMes[m].receita += v
         else porMes[m].despesa += v
@@ -44,7 +81,11 @@ export async function GET(req: NextRequest) {
     }
     const rd = (m: string): RD => porMes[m] ?? { receita: 0, despesa: 0 }
 
-    const contas = (contasRaw ?? []).map((c) => ({ nome: c.nome, tipo: c.tipo, saldo: round(saldo[c.id] ?? 0) }))
+    const mesSaldo = ultima ? ultima.slice(0, 7) : new Date().toISOString().slice(0, 7)
+    const contas = contasFiltradas.map((c) => ({
+      nome: c.nome, tipo: c.tipo,
+      saldo: round(conv(saldoNativo[c.id] ?? 0, moedaPorConta[c.id], mesSaldo)),
+    }))
     const saldoTotal = round(contas.filter((c) => c.tipo === 'corrente').reduce((s, c) => s + c.saldo, 0))
     const dividasLongoPrazo = round(contas.filter((c) => c.tipo === 'emprestimo').reduce((s, c) => s + c.saldo, 0))
     const saldoCartoes = round(contas.filter((c) => c.tipo === 'cartao').reduce((s, c) => s + c.saldo, 0))
@@ -87,12 +128,47 @@ export async function GET(req: NextRequest) {
       pontos = janela.map((m) => ponto(rotuloMes(m), rd(m)))
     }
 
+    // Transferências entre empresas distintas dentro da visão — exibidas como
+    // referência (já não entram em receita/despesa: ao marcar a transferência,
+    // conta_contabil_id é zerado nos dois lançamentos).
+    const transferenciasReferencia: {
+      data: string; contaOrigem: string; contaDestino: string
+      valorOrigem: number; moedaOrigem: Moeda; valorDestino: number; moedaDestino: Moeda
+    }[] = []
+    if (combinada) {
+      type TransfRow = {
+        data: string; valor: number; valor_destino: number | null
+        origem: { id: string; nome: string; empresa_id: string | null } | null
+        destino: { id: string; nome: string; empresa_id: string | null } | null
+      }
+      const { data: transfs } = await supabase
+        .from('transferencias')
+        .select('data, valor, valor_destino, origem:conta_origem_id(id, nome, empresa_id), destino:conta_destino_id(id, nome, empresa_id)')
+        .order('data', { ascending: false })
+        .limit(50)
+
+      for (const t of (transfs ?? []) as unknown as TransfRow[]) {
+        const empresaOrigem = t.origem?.empresa_id ?? null
+        const empresaDestino = t.destino?.empresa_id ?? null
+        const dentroDaVisao = !empresaIds.length || (empresaIds.includes(empresaOrigem ?? '') && empresaIds.includes(empresaDestino ?? ''))
+        if (!dentroDaVisao || empresaOrigem === empresaDestino) continue
+        transferenciasReferencia.push({
+          data: t.data,
+          contaOrigem: t.origem?.nome ?? '—', contaDestino: t.destino?.nome ?? '—',
+          valorOrigem: Number(t.valor), moedaOrigem: moedaEmpresa[empresaOrigem ?? ''] ?? 'BRL',
+          valorDestino: Number(t.valor_destino ?? t.valor), moedaDestino: moedaEmpresa[empresaDestino ?? ''] ?? 'BRL',
+        })
+      }
+    }
+
     return NextResponse.json({
+      moeda, combinada,
       ultimaAtualizacao: ultima,
       contas, saldoTotal, dividasLongoPrazo, saldoCartoes,
       esteMes: card(mDado(0)), mesPassado: card(mDado(1)), mesAnterior: card(mDado(2)),
       ytd: { atual: ytdDe(refAno), anterior: ytdDe(refAno - 1) },
       visao, pontos,
+      transferenciasReferencia,
     })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })

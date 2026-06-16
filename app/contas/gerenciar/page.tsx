@@ -1,10 +1,15 @@
 'use client'
 
 import { useEffect, useMemo, useState } from 'react'
+import { useEmpresas } from '../../_components/EmpresaProvider'
 
-type Conta = { id: string; nome: string; banco: string; tipo: 'corrente' | 'cartao' | 'emprestimo' }
+type Conta = {
+  id: string; nome: string; banco: string; tipo: 'corrente' | 'cartao' | 'emprestimo'
+  empresa_id: string | null; empresas?: { id: string; nome: string; moeda: string } | null
+}
 
 export default function GerenciarContasPage() {
+  const { empresas } = useEmpresas()
   const [contas, setContas] = useState<Conta[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
@@ -13,10 +18,12 @@ export default function GerenciarContasPage() {
   const [nNome, setNNome] = useState('')
   const [nBanco, setNBanco] = useState('')
   const [nTipo, setNTipo] = useState<'corrente' | 'cartao' | 'emprestimo'>('corrente')
+  const [nEmpresa, setNEmpresa] = useState('')
 
   const [editId, setEditId] = useState<string | null>(null)
   const [eNome, setENome] = useState('')
   const [eBanco, setEBanco] = useState('')
+  const [eEmpresa, setEEmpresa] = useState('')
 
   const carregar = () => {
     fetch('/api/contas')
@@ -28,6 +35,10 @@ export default function GerenciarContasPage() {
 
   useEffect(() => { carregar() }, [])
 
+  // Empresa efetiva do formulário de criação: a escolhida, ou a primeira por padrão
+  // (derivado, não sincronizado via effect — evita setState em cascata).
+  const nEmpresaEfetiva = nEmpresa || empresas[0]?.id || ''
+
   const correntes = useMemo(() => contas.filter((c) => c.tipo === 'corrente'), [contas])
   const cartoes = useMemo(() => contas.filter((c) => c.tipo === 'cartao'), [contas])
   const emprestimos = useMemo(() => contas.filter((c) => c.tipo === 'emprestimo'), [contas])
@@ -36,7 +47,7 @@ export default function GerenciarContasPage() {
     if (!nNome.trim() || !nBanco.trim()) return
     setBusy(true); setErro(null)
     try {
-      const res = await fetch('/api/contas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome: nNome, banco: nBanco, tipo: nTipo }) })
+      const res = await fetch('/api/contas', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ nome: nNome, banco: nBanco, tipo: nTipo, empresa_id: nEmpresaEfetiva || undefined }) })
       const d = await res.json()
       if (d.error) throw new Error(d.error)
       if (d.conta) setContas((p) => [...p, d.conta]); else carregar()
@@ -48,7 +59,7 @@ export default function GerenciarContasPage() {
     if (!editId) return
     setBusy(true); setErro(null)
     try {
-      const res = await fetch('/api/contas', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: editId, nome: eNome, banco: eBanco }) })
+      const res = await fetch('/api/contas', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: editId, nome: eNome, banco: eBanco, empresa_id: eEmpresa || undefined }) })
       const d = await res.json()
       if (d.error) throw new Error(d.error)
       setContas((p) => p.map((c) => (c.id === editId ? d.conta : c)))
@@ -73,6 +84,11 @@ export default function GerenciarContasPage() {
         <>
           <input value={eNome} onChange={(e) => setENome(e.target.value)} className="flex-1 border border-slate-300 rounded-lg px-2 py-1 text-sm" autoFocus />
           <input value={eBanco} onChange={(e) => setEBanco(e.target.value)} className="w-32 border border-slate-300 rounded-lg px-2 py-1 text-sm" />
+          {empresas.length > 1 && (
+            <select value={eEmpresa} onChange={(e) => setEEmpresa(e.target.value)} className="border border-slate-300 rounded-lg px-2 py-1 text-xs">
+              {empresas.map((emp) => <option key={emp.id} value={emp.id}>{emp.nome}</option>)}
+            </select>
+          )}
           <button onClick={salvarEdicao} disabled={busy} className="text-xs text-green-600 font-medium hover:underline disabled:opacity-50">Salvar</button>
           <button onClick={() => setEditId(null)} className="text-xs text-slate-400 hover:underline">Cancelar</button>
         </>
@@ -80,9 +96,11 @@ export default function GerenciarContasPage() {
         <>
           <div className="flex-1">
             <p className="text-sm font-medium text-slate-700">{c.nome}</p>
-            <p className="text-xs text-slate-400">{c.banco}</p>
+            <p className="text-xs text-slate-400">
+              {c.banco}{empresas.length > 1 && c.empresas ? ` · ${c.empresas.nome} (${c.empresas.moeda})` : ''}
+            </p>
           </div>
-          <button onClick={() => { setEditId(c.id); setENome(c.nome); setEBanco(c.banco) }} className="text-slate-400 hover:text-slate-700 text-sm" title="Editar">✎</button>
+          <button onClick={() => { setEditId(c.id); setENome(c.nome); setEBanco(c.banco); setEEmpresa(c.empresa_id ?? '') }} className="text-slate-400 hover:text-slate-700 text-sm" title="Editar">✎</button>
           <button onClick={() => remover(c)} className="text-slate-400 hover:text-red-500 text-sm" title="Excluir">🗑</button>
         </>
       )}
@@ -118,6 +136,14 @@ export default function GerenciarContasPage() {
               <option value="emprestimo">Empréstimo</option>
             </select>
           </div>
+          {empresas.length > 1 && (
+            <div>
+              <label className="block text-xs font-medium text-slate-500 mb-1">Empresa</label>
+              <select value={nEmpresaEfetiva} onChange={(e) => setNEmpresa(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500">
+                {empresas.map((emp) => <option key={emp.id} value={emp.id}>{emp.nome} ({emp.moeda})</option>)}
+              </select>
+            </div>
+          )}
           <button onClick={criar} disabled={busy || !nNome.trim() || !nBanco.trim()} className="bg-slate-800 text-white text-sm font-semibold px-4 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">Adicionar</button>
         </div>
       </div>

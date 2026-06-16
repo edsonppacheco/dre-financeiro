@@ -1,18 +1,22 @@
 'use client'
 
 import { useCallback, useEffect, useState } from 'react'
+import { useEmpresas } from '../_components/EmpresaProvider'
+import { fmtMoeda, type Moeda } from '@/lib/formato'
 
 type Coluna = { chave: string; label: string }
 type LinhaCalc = { codigo: string; nome: string; tipo: string; nivel: number; valores: Record<string, number> }
 type Visao = 'ano' | 'trimestres' | 'meses' | 'trimestre' | 'mes' | 'anos'
 type BalancoCol = { contasCorrentes: number; cartoes: number; emprestimos: number; capitalInicial: number; lucroLiquido: number; lucrosDistribuidos: number; lucrosRetidos: number; totalAtivos: number; totalPassivosPL: number }
 type SerieCol = { distribuicaoMes: number; recebimentoEmprestimos: number; pagamentoEmprestimos: number }
+type TransfRef = { data: string; contaOrigem: string; contaDestino: string; valorOrigem: number; moedaOrigem: Moeda; valorDestino: number; moedaDestino: Moeda }
 
 const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
-const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+const fmtDataRef = (s: string) => { const [a, m, d] = s.split('-'); return `${d}/${m}/${a}` }
 const TOTAL = '__total__'
 
 export default function RelatoriosPage() {
+  const { selecionadas, combinada: empresasCombinadas, moedaCombinada } = useEmpresas()
   const [anos, setAnos] = useState<number[]>([])
   const [ano, setAno] = useState<number | null>(null)
   const [visao, setVisao] = useState<Visao>('meses')
@@ -23,8 +27,12 @@ export default function RelatoriosPage() {
   const [lucroLiquido, setLucroLiquido] = useState<Record<string, number>>({})
   const [balanco, setBalanco] = useState<Record<string, BalancoCol>>({})
   const [serie, setSerie] = useState<Record<string, SerieCol>>({})
+  const [moeda, setMoeda] = useState<Moeda>('BRL')
+  const [combinada, setCombinada] = useState(false)
+  const [transferenciasReferencia, setTransferenciasReferencia] = useState<TransfRef[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
+  const fmt = useCallback((v: number) => fmtMoeda(v, moeda), [moeda])
 
   const carregar = useCallback((anoArg: number | null, v: Visao, t: number, m: number) => {
     const p = new URLSearchParams()
@@ -32,16 +40,19 @@ export default function RelatoriosPage() {
     p.set('visao', v)
     if (v === 'trimestre') p.set('trimestre', String(t))
     if (v === 'mes') p.set('mes', String(m))
+    if (selecionadas.length) p.set('empresas', selecionadas.join(','))
+    if (empresasCombinadas) p.set('moeda', moedaCombinada)
     fetch(`/api/dre?${p.toString()}`)
       .then((r) => r.json())
       .then((d) => {
         if (d.error) throw new Error(d.error)
         setAnos(d.anos); setAno(d.ano); setColunas(d.colunas); setLinhas(d.linhas)
         setLucroLiquido(d.lucroLiquido); setBalanco(d.balanco ?? {}); setSerie(d.serie ?? {})
+        setMoeda(d.moeda ?? 'BRL'); setCombinada(!!d.combinada); setTransferenciasReferencia(d.transferenciasReferencia ?? [])
       })
       .catch((e) => setErro(e.message))
       .finally(() => setLoading(false))
-  }, [])
+  }, [selecionadas, empresasCombinadas, moedaCombinada])
 
   useEffect(() => { carregar(null, 'meses', 1, 1) }, [carregar])
 
@@ -60,6 +71,8 @@ export default function RelatoriosPage() {
     p.set('visao', visao)
     if (visao === 'trimestre') p.set('trimestre', String(trimestre))
     if (visao === 'mes') p.set('mes', String(mesSel))
+    if (selecionadas.length) p.set('empresas', selecionadas.join(','))
+    if (empresasCombinadas) p.set('moeda', moedaCombinada)
     return `/api/exportar?${p.toString()}`
   }
 
@@ -101,7 +114,10 @@ export default function RelatoriosPage() {
     <div className="max-w-6xl mx-auto">
       <div className="mb-5">
         <h1 className="text-2xl font-bold text-slate-800">Relatórios Financeiros</h1>
-        <p className="text-slate-500 mt-1">DRE e Balanço pelo plano de contas, por período</p>
+        <p className="text-slate-500 mt-1">
+          DRE e Balanço pelo plano de contas, por período
+          {combinada && <span className="ml-2 text-xs font-medium px-2 py-0.5 rounded-full bg-violet-100 text-violet-700">Combinada · convertido para {moeda}</span>}
+        </p>
       </div>
 
       <div className="flex flex-wrap items-center gap-2 mb-4">
@@ -195,10 +211,30 @@ export default function RelatoriosPage() {
         </div>
       )}
 
+      {/* Transferências entre empresas — referência, não entram na DRE */}
+      {combinada && transferenciasReferencia.length > 0 && (
+        <div className="bg-white rounded-xl border border-slate-200 overflow-hidden mt-4">
+          <div className="px-4 py-2.5 border-b border-slate-100 text-xs font-medium text-slate-500 uppercase tracking-wide">
+            Movimentações entre empresas <span className="font-normal">(referência — não entram na DRE)</span>
+          </div>
+          <div className="divide-y divide-slate-100 max-h-56 overflow-y-auto">
+            {transferenciasReferencia.map((t, i) => (
+              <div key={i} className="flex items-center justify-between px-4 py-2 text-sm">
+                <span className="text-slate-600">{fmtDataRef(t.data)} · {t.contaOrigem} → {t.contaDestino}</span>
+                <span className="text-slate-500 tabular-nums">
+                  {fmtMoeda(t.valorOrigem, t.moedaOrigem)} → {fmtMoeda(t.valorDestino, t.moedaDestino)}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <p className="text-xs text-slate-400 mt-3">
         Valores pela conta contábil atribuída no extrato e pela data real de cada lançamento. Distribuição de lucros não entra na DRE
         (aparece em Movimentações e reduz o patrimônio no Balanço). Empréstimos/cartões entram no Balanço como saldo. A coluna “Total”
         soma os fluxos do período; no Balanço mostra a posição no fim do período.
+        {combinada && ' Valores convertidos pela média mensal do câmbio (saldos pela taxa de fechamento do período).'}
       </p>
     </div>
   )

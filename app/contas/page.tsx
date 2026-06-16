@@ -2,8 +2,13 @@
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useEmpresas } from '../_components/EmpresaProvider'
+import { fmtMoeda, type Moeda } from '@/lib/formato'
 
-type Conta = { id: string; nome: string; banco: string; tipo: 'corrente' | 'cartao' | 'emprestimo'; saldo_inicial?: number }
+type Conta = {
+  id: string; nome: string; banco: string; tipo: 'corrente' | 'cartao' | 'emprestimo'; saldo_inicial?: number
+  empresa_id?: string | null; empresas?: { id: string; nome: string; moeda: Moeda } | null
+}
 type PlanoConta = { id: string; codigo: string; nome: string; tipo: string }
 type Pessoa = { id: string; nome: string }
 type Lancamento = {
@@ -33,7 +38,6 @@ type ExtratoResp = {
   fornecedores: Pessoa[]
 }
 
-const fmt = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const fmtData = (s: string) => { const [a, m, d] = s.split('-'); return `${d}/${m}/${a}` }
 const MESES_PT = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julho', 'Agosto', 'Setembro', 'Outubro', 'Novembro', 'Dezembro']
 const fmtNum = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -42,6 +46,7 @@ const NOVO_CLIENTE = '__novo_cliente__'
 const NOVO_FORNECEDOR = '__novo_fornecedor__'
 
 export default function ContasExtratoPage() {
+  const { selecionadas: empresasSelecionadas } = useEmpresas()
   const [contas, setContas] = useState<Conta[]>([])
   const [contaId, setContaId] = useState<string>('')
   const [ext, setExt] = useState<ExtratoResp | null>(null)
@@ -211,16 +216,50 @@ export default function ContasExtratoPage() {
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
 
-  const correntes = contas.filter((c) => c.tipo === 'corrente')
-  const cartoes = contas.filter((c) => c.tipo === 'cartao')
-  const emprestimos = contas.filter((c) => c.tipo === 'emprestimo')
+  // Lista do seletor principal: só contas das empresas selecionadas globalmente.
+  // O destino de transferência (mais abaixo) usa `contas` sem filtro — qualquer
+  // conta de qualquer empresa pode ser contrapartida.
+  const contasView = useMemo(
+    () => contas.filter((c) => !empresasSelecionadas.length || empresasSelecionadas.includes(c.empresa_id ?? '')),
+    [contas, empresasSelecionadas]
+  )
+  const correntes = contasView.filter((c) => c.tipo === 'corrente')
+  const cartoes = contasView.filter((c) => c.tipo === 'cartao')
+  const emprestimos = contasView.filter((c) => c.tipo === 'emprestimo')
+
+  // Se a empresa selecionada globalmente mudar e a conta atual não pertencer
+  // mais à visão filtrada, troca para a primeira conta disponível nela. Ajuste
+  // feito durante o render (padrão React para "resetar estado quando algo
+  // externo muda"), não em useEffect — evita reentrâncias e renders em cascata.
+  const contasViewKey = contasView.map((c) => c.id).join(',')
+  const [contasViewKeyAnterior, setContasViewKeyAnterior] = useState(contasViewKey)
+  if (contasViewKey !== contasViewKeyAnterior) {
+    setContasViewKeyAnterior(contasViewKey)
+    if (contasView.length && !contasView.some((c) => c.id === contaId)) setContaId(contasView[0].id)
+  }
+
+  const moedaConta = ext?.conta.empresas?.moeda ?? 'BRL'
+  const fmt = useCallback((v: number) => fmtMoeda(v, moedaConta), [moedaConta])
 
   // marca/desmarca um lançamento existente como transferência para outra conta
   const marcarTransferencia = async (l: Lancamento, destinoId: string) => {
+    // Contas de empresas com moedas diferentes: o valor recebido do outro lado
+    // não é calculado automaticamente (câmbio/spread real do banco) — pede para
+    // o usuário informar o valor de fato lançado na conta de destino.
+    const destinoConta = contas.find((c) => c.id === destinoId)
+    const moedaDestino = destinoConta?.empresas?.moeda
+    let valorContraparte: number | undefined
+    if (moedaDestino && moedaDestino !== moedaConta) {
+      const resp = window.prompt(`Contas em moedas diferentes (${moedaConta} → ${moedaDestino}).\nValor recebido em ${moedaDestino} na conta "${destinoConta?.nome}":`)
+      if (resp === null) return // cancelado
+      valorContraparte = parseNum(resp)
+      if (!valorContraparte || valorContraparte <= 0) { setErro('Valor inválido para a contrapartida.'); return }
+    }
+
     setBusy(true); setErro(null)
     try {
       const d = await fetch('/api/transferencias', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ lancamento_id: l.id, conta_destino_id: destinoId }) }).then((r) => r.json())
+        body: JSON.stringify({ lancamento_id: l.id, conta_destino_id: destinoId, valor_contraparte: valorContraparte }) }).then((r) => r.json())
       if (d.error) throw new Error(d.error)
       carregar(contaId, mes)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
@@ -317,7 +356,11 @@ export default function ContasExtratoPage() {
                           <option value="">—</option>
                           {planoFolhas.map((p) => <option key={p.id} value={p.id}>{p.codigo} · {p.nome}</option>)}
                           <optgroup label="⇄ Transferência para">
-                            {contas.filter((c) => c.id !== contaId).map((c) => <option key={c.id} value={`transf:${c.id}`}>{c.nome}</option>)}
+                            {contas.filter((c) => c.id !== contaId).map((c) => (
+                              <option key={c.id} value={`transf:${c.id}`}>
+                                {c.nome}{c.empresas?.moeda && c.empresas.moeda !== moedaConta ? ` (${c.empresas.moeda})` : ''}
+                              </option>
+                            ))}
                           </optgroup>
                         </select>
                       </>

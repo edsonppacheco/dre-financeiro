@@ -46,19 +46,43 @@ export async function PATCH(req: NextRequest) {
     const supabase = createSupabaseAdminClient()
 
     // Se for um lançamento de transferência, propaga valor/data aos dois lados
-    const { data: atual } = await supabase.from('transacoes').select('transferencia_id').eq('id', body.id).single()
+    // (mesma moeda) — ou só ao lado editado (moedas diferentes: cada lado tem
+    // sua própria magnitude, não faz sentido sincronizar os dois números).
+    const { data: atual } = await supabase.from('transacoes').select('conta_id, transferencia_id').eq('id', body.id).single()
     if (atual?.transferencia_id) {
-      const campos: Record<string, unknown> = {}
-      if (body.valor !== undefined) {
+      const dataCampo: Record<string, unknown> = {}
+      if (body.data !== undefined) dataCampo.data = body.data
+
+      if (body.valor === undefined) {
+        if (!Object.keys(dataCampo).length) return NextResponse.json({ error: 'numa transferência só dá para editar valor e data' }, { status: 400 })
+        await supabase.from('transacoes').update(dataCampo).eq('transferencia_id', atual.transferencia_id)
+        await supabase.from('transferencias').update(dataCampo).eq('id', atual.transferencia_id)
+      } else {
         const v = Number(body.valor)
         if (isNaN(v) || v <= 0) return NextResponse.json({ error: 'valor inválido' }, { status: 400 })
-        campos.valor = v
+
+        const { data: transf } = await supabase
+          .from('transferencias')
+          .select('conta_origem_id, conta_destino_id, empresas_origem:conta_origem_id(empresas(moeda)), empresas_destino:conta_destino_id(empresas(moeda))')
+          .eq('id', atual.transferencia_id)
+          .single()
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const t = transf as any
+        const moedaOrigem = t?.empresas_origem?.empresas?.moeda, moedaDestino = t?.empresas_destino?.empresas?.moeda
+        const mesmaMoeda = !moedaOrigem || !moedaDestino || moedaOrigem === moedaDestino
+
+        if (mesmaMoeda) {
+          // comportamento original: sincroniza os dois lados com o mesmo valor
+          await supabase.from('transacoes').update({ valor: v, ...dataCampo }).eq('transferencia_id', atual.transferencia_id)
+          await supabase.from('transferencias').update({ valor: v, valor_destino: v, ...dataCampo }).eq('id', atual.transferencia_id)
+        } else {
+          // moedas diferentes: só este lado muda; o outro mantém sua própria magnitude
+          const ehOrigem = atual.conta_id === t.conta_origem_id
+          await supabase.from('transacoes').update({ valor: v, ...dataCampo }).eq('id', body.id)
+          await supabase.from('transferencias').update({ [ehOrigem ? 'valor' : 'valor_destino']: v, ...dataCampo }).eq('id', atual.transferencia_id)
+          if (Object.keys(dataCampo).length) await supabase.from('transacoes').update(dataCampo).eq('transferencia_id', atual.transferencia_id).neq('id', body.id)
+        }
       }
-      if (body.data !== undefined) campos.data = body.data
-      if (!Object.keys(campos).length) return NextResponse.json({ error: 'numa transferência só dá para editar valor e data' }, { status: 400 })
-      // atualiza os dois lançamentos vinculados e o registro da transferência
-      await supabase.from('transacoes').update(campos).eq('transferencia_id', atual.transferencia_id)
-      await supabase.from('transferencias').update(campos).eq('id', atual.transferencia_id)
       const { data } = await supabase.from('transacoes').select('id, data, descricao, valor, tipo, manual, transferencia_id').eq('id', body.id).single()
       return NextResponse.json({ lancamento: data, transferencia: true })
     }
@@ -170,7 +194,7 @@ export async function GET(req: NextRequest) {
 
     const { data: conta, error: contaErr } = await supabase
       .from('contas')
-      .select('id, nome, banco, tipo, saldo_inicial')
+      .select('id, nome, banco, tipo, saldo_inicial, empresa_id, empresas(id, nome, moeda)')
       .eq('id', contaId)
       .single()
     if (contaErr) return NextResponse.json({ error: contaErr.message }, { status: 500 })
