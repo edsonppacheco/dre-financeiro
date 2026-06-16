@@ -12,6 +12,7 @@ type TransfRef = { data: string; contaOrigem: string; contaDestino: string; valo
 type Dash = {
   moeda: Moeda
   combinada: boolean
+  cambioIndisponivel?: boolean
   ultimaAtualizacao: string | null
   contas: Conta[]
   saldoTotal: number
@@ -49,12 +50,37 @@ function Card({ titulo, children }: { titulo: string; children: React.ReactNode 
   )
 }
 
-function Grafico({ pontos }: { pontos: Ponto[] }) {
+// Abrevia valores para os rótulos do eixo (ex: 1458367 -> "US$ 1,5M")
+function abreviar(v: number, moeda: Moeda): string {
+  const s = moeda === 'USD' ? 'US$' : 'R$'
+  const a = Math.abs(v)
+  if (a >= 1e6) return `${s} ${(v / 1e6).toFixed(1).replace('.', ',')}M`
+  if (a >= 1e3) return `${s} ${Math.round(v / 1e3)}k`
+  return `${s} ${Math.round(v)}`
+}
+
+// Marcas "redondas" para o eixo Y entre min e max
+function marcasEixo(min: number, max: number, alvo = 4): number[] {
+  const range = (max - min) || 1
+  const passoBruto = range / alvo
+  const mag = Math.pow(10, Math.floor(Math.log10(passoBruto)))
+  const norm = passoBruto / mag
+  const passo = (norm >= 5 ? 5 : norm >= 2 ? 2 : 1) * mag
+  const ini = Math.floor(min / passo) * passo
+  const marcas: number[] = []
+  for (let v = ini; v <= max + passo * 0.001; v += passo) marcas.push(Math.round(v * 100) / 100)
+  return marcas
+}
+
+function Grafico({ pontos, moeda }: { pontos: Ponto[]; moeda: Moeda }) {
   if (!pontos.length) return <p className="text-sm text-slate-400 py-8 text-center">Sem dados no período</p>
-  const W = Math.max(640, pontos.length * 64), H = 240, pad = { t: 16, b: 28, l: 8, r: 8 }
-  const max = Math.max(1, ...pontos.flatMap((p) => [p.receita, p.despesa, p.lucro]))
-  const min = Math.min(0, ...pontos.map((p) => p.lucro))
-  const range = max - min
+  const W = Math.max(640, pontos.length * 64), H = 240, pad = { t: 16, b: 28, l: 64, r: 12 }
+  const maxData = Math.max(1, ...pontos.flatMap((p) => [p.receita, p.despesa, p.lucro]))
+  const minData = Math.min(0, ...pontos.map((p) => p.lucro))
+  const marcas = marcasEixo(minData, maxData)
+  const max = Math.max(maxData, ...marcas)
+  const min = Math.min(minData, ...marcas)
+  const range = (max - min) || 1
   const y = (v: number) => pad.t + (H - pad.t - pad.b) * (max - v) / range
   const y0 = y(0)
   const slot = (W - pad.l - pad.r) / pontos.length
@@ -63,7 +89,13 @@ function Grafico({ pontos }: { pontos: Ponto[] }) {
   return (
     <div className="overflow-x-auto">
       <svg viewBox={`0 0 ${W} ${H}`} width={W} height={H} className="max-w-full">
-        <line x1={pad.l} y1={y0} x2={W - pad.r} y2={y0} stroke="#cbd5e1" strokeWidth="1" />
+        {/* Eixo Y: linhas-guia + rótulos com escala */}
+        {marcas.map((m, i) => (
+          <g key={`g${i}`}>
+            <line x1={pad.l} y1={y(m)} x2={W - pad.r} y2={y(m)} stroke={m === 0 ? '#cbd5e1' : '#eef2f6'} strokeWidth="1" />
+            <text x={pad.l - 6} y={y(m) + 3} textAnchor="end" fontSize="9" fill="#94a3b8">{abreviar(m, moeda)}</text>
+          </g>
+        ))}
         {pontos.map((p, i) => {
           const cx = pad.l + slot * (i + 0.5)
           return (
@@ -118,6 +150,13 @@ export default function PainelPage() {
         </div>
         <p className="text-xs text-slate-400">Última atualização: {d.ultimaAtualizacao ? fmtData(d.ultimaAtualizacao) : '—'}</p>
       </div>
+
+      {d.cambioIndisponivel && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">
+          ⚠ Câmbio não disponível para a conversão combinada. Os valores abaixo <strong>não estão convertidos</strong>.
+          Vá em <a href="/configuracoes" className="underline font-medium">Configurações → Câmbio</a> e clique em &quot;Atualizar câmbio&quot;.
+        </div>
+      )}
 
       <div className="grid sm:grid-cols-3 gap-4 mb-4">
         <Card titulo="Saldo total (contas correntes)"><p className={`text-3xl font-bold ${d.saldoTotal < 0 ? 'text-red-600' : 'text-slate-800'}`}>{fmt(d.saldoTotal)}</p></Card>
@@ -202,7 +241,7 @@ export default function PainelPage() {
             {VISOES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
           </select>
         </div>
-        <Grafico pontos={d.pontos} />
+        <Grafico pontos={d.pontos} moeda={d.moeda} />
       </div>
     </div>
   )

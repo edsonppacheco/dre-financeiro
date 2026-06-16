@@ -57,7 +57,12 @@ export async function obterCambioMensal(mes: string, forcar = false): Promise<nu
  * buscando da AwesomeAPI as que ainda não existem. Meses sem cotação disponível
  * (ex: período futuro) são simplesmente omitidos do mapa retornado.
  */
-export async function obterTaxasMensais(meses: string[]): Promise<Record<string, number>> {
+// buscarFaltantes: quando true, busca na AwesomeAPI os meses ausentes (use só em
+// rotas com tempo folgado, como /api/cambio). As rotas de leitura (dashboard/DRE)
+// passam false para NÃO bloquear o request buscando dezenas de meses (o que
+// estourava o timeout serverless e deixava o câmbio sem persistir) — elas leem o
+// que já está no banco e avisam o usuário se faltar, deixando a carga para o botão.
+export async function obterTaxasMensais(meses: string[], buscarFaltantes = true): Promise<Record<string, number>> {
   const unicos = Array.from(new Set(meses))
   if (!unicos.length) return {}
   const supabase = createSupabaseAdminClient()
@@ -70,9 +75,11 @@ export async function obterTaxasMensais(meses: string[]): Promise<Record<string,
   const mapa: Record<string, number> = {}
   for (const e of existentes ?? []) mapa[e.mes as string] = Number(e.taxa)
 
-  const faltantes = unicos.filter((m) => mapa[m] === undefined)
-  for (const mes of faltantes) {
-    try { mapa[mes] = await obterCambioMensal(mes) } catch { /* mês sem cotação (ex: futuro); segue sem ele */ }
+  if (buscarFaltantes) {
+    const faltantes = unicos.filter((m) => mapa[m] === undefined)
+    for (const mes of faltantes) {
+      try { mapa[mes] = await obterCambioMensal(mes) } catch { /* mês sem cotação (ex: futuro); segue sem ele */ }
+    }
   }
   return mapa
 }

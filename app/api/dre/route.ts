@@ -105,7 +105,9 @@ export async function GET(req: NextRequest) {
     // Mês corrente: a cotação atual serve de fallback p/ saldo do período em
     // andamento, cujo fim (ex: dez do ano corrente) ainda não tem taxa.
     mesesEnvolvidos.add(new Date().toISOString().slice(0, 7))
-    const taxas = combinada ? await obterTaxasMensais([...mesesEnvolvidos]) : {}
+    // Lê só do banco (sem buscar na AwesomeAPI no request); avisa se faltar.
+    const taxas = combinada ? await obterTaxasMensais([...mesesEnvolvidos], false) : {}
+    const cambioIndisponivel = combinada && Object.keys(taxas).length === 0
     const conv = (valor: number, deMoeda: Moeda, mes: string) => combinada ? converterComTaxas(valor, deMoeda, moeda, mes, taxas) : valor
 
     // Soma por conta contábil, por coluna — cada transação convertida pela taxa
@@ -220,7 +222,7 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    return NextResponse.json({ anos, ano, visao, colunas, linhas, lucroLiquido, balanco, serie, totalTransacoes: txs.length, moeda, combinada, transferenciasReferencia })
+    return NextResponse.json({ anos, ano, visao, colunas, linhas, lucroLiquido, balanco, serie, totalTransacoes: txs.length, moeda, combinada, cambioIndisponivel, transferenciasReferencia })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
   }

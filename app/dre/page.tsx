@@ -29,6 +29,7 @@ export default function RelatoriosPage() {
   const [serie, setSerie] = useState<Record<string, SerieCol>>({})
   const [moeda, setMoeda] = useState<Moeda>('BRL')
   const [combinada, setCombinada] = useState(false)
+  const [cambioIndisponivel, setCambioIndisponivel] = useState(false)
   const [transferenciasReferencia, setTransferenciasReferencia] = useState<TransfRef[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
@@ -48,7 +49,7 @@ export default function RelatoriosPage() {
         if (d.error) throw new Error(d.error)
         setAnos(d.anos); setAno(d.ano); setColunas(d.colunas); setLinhas(d.linhas)
         setLucroLiquido(d.lucroLiquido); setBalanco(d.balanco ?? {}); setSerie(d.serie ?? {})
-        setMoeda(d.moeda ?? 'BRL'); setCombinada(!!d.combinada); setTransferenciasReferencia(d.transferenciasReferencia ?? [])
+        setMoeda(d.moeda ?? 'BRL'); setCombinada(!!d.combinada); setCambioIndisponivel(!!d.cambioIndisponivel); setTransferenciasReferencia(d.transferenciasReferencia ?? [])
       })
       .catch((e) => setErro(e.message))
       .finally(() => setLoading(false))
@@ -147,6 +148,13 @@ export default function RelatoriosPage() {
       </div>
 
       {erro && <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">{erro}</div>}
+
+      {cambioIndisponivel && (
+        <div className="mb-4 bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-lg px-4 py-3">
+          ⚠ Câmbio não disponível para a conversão combinada. Os valores <strong>não estão convertidos</strong>.
+          Vá em <a href="/configuracoes" className="underline font-medium">Configurações → Câmbio</a> e clique em &quot;Atualizar câmbio&quot;.
+        </div>
+      )}
 
       {colunas.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">

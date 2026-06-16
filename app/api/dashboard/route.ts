@@ -58,7 +58,10 @@ export async function GET(req: NextRequest) {
     for (const t of txFiltradas) if (!ultima || (t.data as string) > ultima) ultima = t.data as string
     const mesesEnvolvidos = Array.from(new Set(txFiltradas.map((t) => (t.data as string).slice(0, 7))))
     mesesEnvolvidos.push(mesAtual)
-    const taxas = combinada ? await obterTaxasMensais(mesesEnvolvidos) : {}
+    // Lê só do banco (sem buscar na AwesomeAPI dentro do request). Se faltar,
+    // sinaliza para a UI pedir "Atualizar câmbio" em vez de mostrar número errado.
+    const taxas = combinada ? await obterTaxasMensais(mesesEnvolvidos, false) : {}
+    const cambioIndisponivel = combinada && Object.keys(taxas).length === 0
     const conv = (valor: number, deMoeda: Moeda, mes: string) => combinada ? converterComTaxas(valor, deMoeda, moeda, mes, taxas) : valor
 
     // Saldos por conta (acumulados na moeda nativa, convertidos só no final) +
@@ -166,7 +169,7 @@ export async function GET(req: NextRequest) {
     }
 
     return NextResponse.json({
-      moeda, combinada,
+      moeda, combinada, cambioIndisponivel,
       ultimaAtualizacao: ultima,
       contas, saldoTotal, dividasLongoPrazo, saldoCartoes,
       esteMes: card(mDado(0)), mesPassado: card(mDado(1)), mesAnterior: card(mDado(2)),
