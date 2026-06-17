@@ -15,6 +15,7 @@ type UploadResult = {
   extrato_id?: string
   transacoes?: number
   ignoradas?: number
+  prints?: number
   erro?: string
   aviso?: string
   mensagem?: string
@@ -67,7 +68,8 @@ export default function UploadPage() {
     const valid = Array.from(newFiles).filter((f) =>
       ['application/pdf', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
        'application/vnd.ms-excel', 'text/csv'].includes(f.type) ||
-      f.name.endsWith('.xlsx') || f.name.endsWith('.xls') || f.name.endsWith('.pdf') || f.name.endsWith('.csv')
+      f.type.startsWith('image/') ||
+      /\.(xlsx|xls|pdf|csv|png|jpe?g|gif|webp)$/i.test(f.name)
     )
     setFiles((prev) => [...prev, ...valid])
   }, [])
@@ -173,13 +175,14 @@ export default function UploadPage() {
             ref={fileInputRef}
             type="file"
             multiple
-            accept=".pdf,.xlsx,.xls,.csv"
+            accept=".pdf,.xlsx,.xls,.csv,.png,.jpg,.jpeg,.gif,.webp,image/*"
             onChange={(e) => addFiles(e.target.files)}
             className="hidden"
           />
           <div className="text-4xl mb-3">📂</div>
           <p className="font-medium text-slate-700">Arraste arquivos aqui ou clique para selecionar</p>
-          <p className="text-sm text-slate-400 mt-1">PDF, Excel (.xlsx, .xls) ou QuickBooks (.xls/.csv) — múltiplos arquivos permitidos</p>
+          <p className="text-sm text-slate-400 mt-1">PDF, Excel (.xlsx, .xls), QuickBooks (.xls/.csv) ou prints (PNG/JPEG)</p>
+          <p className="text-xs text-slate-400 mt-2">📸 Vários prints do mesmo extrato? Envie todos juntos — a IA monta um extrato só e remove as sobreposições.</p>
         </div>
 
         {/* Lista de arquivos selecionados */}
@@ -195,7 +198,7 @@ export default function UploadPage() {
               {files.map((file, idx) => (
                 <li key={idx} className="flex items-center justify-between px-4 py-3">
                   <div className="flex items-center gap-3">
-                    <span className="text-lg">{file.name.endsWith('.pdf') ? '📄' : '📊'}</span>
+                    <span className="text-lg">{file.type.startsWith('image/') || /\.(png|jpe?g|gif|webp)$/i.test(file.name) ? '📸' : file.name.endsWith('.pdf') ? '📄' : '📊'}</span>
                     <div>
                       <p className="text-sm font-medium text-slate-700 truncate max-w-xs">{file.name}</p>
                       <p className="text-xs text-slate-400">{formatSize(file.size)}</p>
@@ -254,6 +257,7 @@ export default function UploadPage() {
                       {isDuplicado && <p className="text-xs text-amber-600">{r.mensagem}</p>}
                       {!r.erro && !isDuplicado && (
                         <p className="text-xs text-slate-400">
+                          {(r.prints ?? 0) > 1 && `${r.prints} prints montados · `}
                           {r.transacoes} transação(ões) importada(s)
                           {(r.ignoradas ?? 0) > 0 && ` · ${r.ignoradas} ignorada(s) (já existiam)`}
                           {hasDiscrepancia && ' · saldo diverge em alguns dias'}

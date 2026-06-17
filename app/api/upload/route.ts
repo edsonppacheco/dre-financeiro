@@ -4,8 +4,9 @@ import { createSupabaseAdminClient } from '@/lib/supabase'
 import { excelParaTexto } from '@/lib/parsers/excel'
 import { parsePDF, parseTextoExtrato } from '@/lib/parsers/pdf'
 import { ehArquivoQBO, parseQBO, mapearCategoriaQBO } from '@/lib/parsers/qbo'
+import { ehImagem, parseExtratoImagens } from '@/lib/parsers/imagem'
 
-// Extração por IA de extratos grandes pode demorar; amplia o limite de duração.
+// Extração por IA (texto ou visão) de extratos grandes pode demorar.
 export const maxDuration = 300
 
 export async function POST(req: NextRequest) {
@@ -23,90 +24,110 @@ export async function POST(req: NextRequest) {
     const supabase = createSupabaseAdminClient()
     const resultados = []
 
-    for (const file of files) {
-      const buffer = await file.arrayBuffer()
-      const ext = file.name.split('.').pop()?.toLowerCase()
+    // Cada documento (PDF/Excel/CSV) é um extrato. TODAS as imagens enviadas
+    // juntas são tratadas como UM extrato só (prints do mesmo extrato), que a IA
+    // monta unindo os prints e removendo sobreposições.
+    type Unidade = { nome: string; arquivos: File[]; ehImagem: boolean }
+    const imagens = files.filter((f) => ehImagem(f.name, f.type))
+    const docs = files.filter((f) => !ehImagem(f.name, f.type))
+    const unidades: Unidade[] = docs.map((f) => ({ nome: f.name, arquivos: [f], ehImagem: false }))
+    if (imagens.length) {
+      const nome = imagens.length > 1 ? `${imagens[0].name} +${imagens.length - 1} print(s)` : imagens[0].name
+      unidades.push({ nome, arquivos: imagens, ehImagem: true })
+    }
 
-      // Upload para Vercel Blob (addRandomSuffix evita conflito ao reenviar o mesmo arquivo)
-      const blob = await put(`extratos/${contaId}/${hojeMes}/${file.name}`, buffer, {
-        access: 'private',
-        contentType: file.type,
-        addRandomSuffix: true,
-      })
+    for (const unidade of unidades) {
+      const nome = unidade.nome
+
+      // Sobe cada arquivo da unidade ao Blob; guarda os buffers para o parse.
+      const arquivosBuf: { buffer: ArrayBuffer; nome: string; mime: string }[] = []
+      let arquivoUrl = ''
+      for (const f of unidade.arquivos) {
+        const buffer = await f.arrayBuffer()
+        arquivosBuf.push({ buffer, nome: f.name, mime: f.type })
+        const blob = await put(`extratos/${contaId}/${hojeMes}/${f.name}`, buffer, {
+          access: 'private', contentType: f.type, addRandomSuffix: true,
+        })
+        if (!arquivoUrl) arquivoUrl = blob.url
+      }
 
       // Cria registro do extrato (mes_referencia provisório; ajustado após o parse)
       const { data: extrato, error: extratoErr } = await supabase
         .from('extratos')
-        .insert({ conta_id: contaId, mes_referencia: `${hojeMes}-01`, arquivo_url: blob.url, status: 'processando' })
+        .insert({ conta_id: contaId, mes_referencia: `${hojeMes}-01`, arquivo_url: arquivoUrl, status: 'processando' })
         .select()
         .single()
 
       if (extratoErr || !extrato) {
-        resultados.push({ arquivo: file.name, erro: extratoErr?.message ?? 'Erro ao criar extrato' })
+        resultados.push({ arquivo: nome, erro: extratoErr?.message ?? 'Erro ao criar extrato' })
         continue
       }
 
-      // Parseia o arquivo. transacoes pode carregar conta_contabil_id/confianca
-      // quando a fonte já traz a categoria (ex: coluna Account do QuickBooks).
+      // Parseia. transacoes pode carregar conta_contabil_id/confianca quando a
+      // fonte já traz a categoria (ex: coluna Account do QuickBooks).
       let transacoes: { data: string; descricao: string; valor: number; tipo: string; conta_contabil_id?: string | null; confianca?: number }[] = []
       let saldoInicial: number | null = null
       let saldosDia: { data: string; saldo: number }[] = []
-      // QBO traz o saldo corrente em cada linha → o saldo inicial é derivado de
-      // forma autoritativa (não é um palpite). Por isso pode sobrescrever um
-      // valor já existente na conta, em vez de só preencher quando está zerado.
+      // QBO traz o saldo corrente em cada linha → saldo inicial autoritativo.
       let saldoInicialAutoritativo = false
       try {
-        if (ext === 'pdf') {
-          const r = await parsePDF(buffer)
-          transacoes = r.transacoes
-          saldoInicial = r.saldoInicial
-          saldosDia = r.saldosDia
-        } else if (['xlsx', 'xls', 'csv'].includes(ext ?? '') && ehArquivoQBO(buffer)) {
-          // Extrato do QuickBooks (Account Register): parser determinístico, sinais
-          // explícitos (Payment/Deposit), e categoria do QBO -> plano de contas.
-          const r = parseQBO(buffer)
-          saldoInicial = r.saldoInicial
-          saldosDia = r.saldosDia
-          saldoInicialAutoritativo = true
-          const { data: plano } = await supabase.from('plano_contas').select('id, codigo')
-          const idPorCodigo: Record<string, string> = {}
-          for (const p of plano ?? []) idPorCodigo[p.codigo] = p.id
-          transacoes = r.transacoes.map((t) => {
-            const codigo = mapearCategoriaQBO(t.categoriaQBO, t.tipo)
-            const ccId = codigo ? idPorCodigo[codigo] : undefined
-            return {
-              data: t.data, descricao: t.descricao, valor: t.valor, tipo: t.tipo,
-              ...(ccId ? { conta_contabil_id: ccId, confianca: 0.5 } : {}),
-            }
-          })
-        } else if (['xlsx', 'xls'].includes(ext ?? '')) {
-          const r = await parseTextoExtrato(await excelParaTexto(buffer))
+        if (unidade.ehImagem) {
+          const r = await parseExtratoImagens(arquivosBuf)
           transacoes = r.transacoes
           saldoInicial = r.saldoInicial
           saldosDia = r.saldosDia
         } else {
-          throw new Error('Formato não suportado. Use PDF ou Excel.')
+          const { buffer } = arquivosBuf[0]
+          const ext = nome.split('.').pop()?.toLowerCase()
+          if (ext === 'pdf') {
+            const r = await parsePDF(buffer)
+            transacoes = r.transacoes
+            saldoInicial = r.saldoInicial
+            saldosDia = r.saldosDia
+          } else if (['xlsx', 'xls', 'csv'].includes(ext ?? '') && ehArquivoQBO(buffer)) {
+            // QuickBooks Account Register: parser determinístico, sinais explícitos.
+            const r = parseQBO(buffer)
+            saldoInicial = r.saldoInicial
+            saldosDia = r.saldosDia
+            saldoInicialAutoritativo = true
+            const { data: plano } = await supabase.from('plano_contas').select('id, codigo')
+            const idPorCodigo: Record<string, string> = {}
+            for (const p of plano ?? []) idPorCodigo[p.codigo] = p.id
+            transacoes = r.transacoes.map((t) => {
+              const codigo = mapearCategoriaQBO(t.categoriaQBO, t.tipo)
+              const ccId = codigo ? idPorCodigo[codigo] : undefined
+              return {
+                data: t.data, descricao: t.descricao, valor: t.valor, tipo: t.tipo,
+                ...(ccId ? { conta_contabil_id: ccId, confianca: 0.5 } : {}),
+              }
+            })
+          } else if (['xlsx', 'xls'].includes(ext ?? '')) {
+            const r = await parseTextoExtrato(await excelParaTexto(buffer))
+            transacoes = r.transacoes
+            saldoInicial = r.saldoInicial
+            saldosDia = r.saldosDia
+          } else {
+            throw new Error('Formato não suportado. Use PDF, Excel, CSV ou imagem (print).')
+          }
         }
       } catch (parseErr: unknown) {
         await supabase.from('extratos').update({ status: 'erro' }).eq('id', extrato.id)
-        resultados.push({ arquivo: file.name, erro: parseErr instanceof Error ? parseErr.message : 'Erro no parse' })
+        resultados.push({ arquivo: nome, erro: parseErr instanceof Error ? parseErr.message : 'Erro no parse' })
         continue
       }
 
       // A conta já tinha lançamentos antes deste upload? Define se o saldo
       // inicial (abertura de TODO o histórico) ainda pode ser estabelecido por
-      // este arquivo. Statements de sub-período (ex: PDF mensal) não devem
+      // este arquivo. Statements de sub-período (ex: PDF/print mensal) não devem
       // sobrescrever a abertura já existente com a abertura do seu período.
       const { count: txExistentesConta } = await supabase
         .from('transacoes').select('id', { count: 'exact', head: true }).eq('conta_id', contaId)
       const contaJaTinhaTransacoes = (txExistentesConta ?? 0) > 0
 
       // ── Deduplicação em nível de TRANSAÇÃO (não de data) ─────────────────────
-      // Uma data pode ter várias transações; deduplicar por data descartaria
-      // lançamentos novos só porque o dia já tinha algum (era o que impedia Março
-      // de entrar). A chave é (data, descrição, valor, tipo) e usamos contagem
-      // (multiset): se o banco tem N cópias de uma chave, pulamos só N do arquivo,
-      // preservando lançamentos legítimos idênticos no mesmo dia.
+      // A chave é (data, descrição, valor, tipo) com contagem (multiset): se o
+      // banco tem N cópias de uma chave, pulamos só N do arquivo, preservando
+      // lançamentos legítimos idênticos no mesmo dia.
       let transacoesParaImportar = transacoes
       let saldosDiaParaImportar = saldosDia
       const datasDoArquivo = [...transacoes.map((t) => t.data), ...saldosDia.map((s) => s.data)].sort()
@@ -114,7 +135,6 @@ export async function POST(req: NextRequest) {
       if (datasDoArquivo.length > 0) {
         const dataMin = datasDoArquivo[0]
         const dataMax = datasDoArquivo[datasDoArquivo.length - 1]
-        // Escopo restrito ao intervalo do arquivo (evita o teto de 1000 linhas)
         const [{ data: txExistentes }, { data: saldosExistentes }] = await Promise.all([
           supabase.from('transacoes').select('data, descricao, valor, tipo').eq('conta_id', contaId).gte('data', dataMin).lte('data', dataMax),
           supabase.from('saldos_extrato').select('data').eq('conta_id', contaId).gte('data', dataMin).lte('data', dataMax),
@@ -141,9 +161,9 @@ export async function POST(req: NextRequest) {
           await supabase.from('extratos').update({ status: 'duplicado' }).eq('id', extrato.id)
           const datasUnicas = [...new Set(transacoes.map((t) => t.data))].sort()
           resultados.push({
-            arquivo: file.name,
+            arquivo: nome,
             aviso: 'duplicado',
-            mensagem: `Extrato já importado — ${transacoes.length} transações extraídas pelo parser (${datasUnicas[0]} a ${datasUnicas.at(-1)}), todas já existem nesta conta.`,
+            mensagem: `Extrato já importado — ${transacoes.length} transações extraídas (${datasUnicas[0]} a ${datasUnicas.at(-1)}), todas já existem nesta conta.`,
           })
           continue
         }
@@ -158,19 +178,16 @@ export async function POST(req: NextRequest) {
         )
         if (txErr) {
           await supabase.from('extratos').update({ status: 'erro' }).eq('id', extrato.id)
-          resultados.push({ arquivo: file.name, erro: txErr.message })
+          resultados.push({ arquivo: nome, erro: txErr.message })
           continue
         }
       }
 
-      // Saldo inicial (1º extrato) e saldos diários do documento (PDF e Excel).
-      // Em try/catch para não falhar o upload caso a migração de saldo ainda não exista.
+      // Saldo inicial e saldos diários do documento.
       try {
         // Só define o saldo inicial (abertura de TODO o histórico) quando:
         //  - QBO (autoritativo: o saldo corrente do documento é a fonte da verdade), ou
         //  - a conta ainda não tinha nenhum lançamento (este é o 1º import).
-        // Assim um PDF de sub-período não sobrescreve a abertura com a abertura do
-        // seu próprio período (o que deslocava todos os saldos calculados).
         if (saldoInicial !== null && (saldoInicialAutoritativo || !contaJaTinhaTransacoes)) {
           await supabase.from('contas').update({ saldo_inicial: saldoInicial }).eq('id', contaId)
         }
@@ -182,8 +199,6 @@ export async function POST(req: NextRequest) {
       } catch { /* ignora: feature de saldo depende de migração */ }
 
       // ── Conciliação: saldo calculado pelas transações vs saldo do extrato ──
-      // Compara o saldo acumulado (saldo_inicial + movimentos) com os saldos
-      // informados pelo banco para cada dia do período importado.
       const conciliacao: { data: string; saldo_calculado: number; saldo_extrato: number; diferenca: number }[] = []
       if (saldosDiaParaImportar.length > 0) {
         const dataFim = [...saldosDiaParaImportar].sort((a, b) => a.data.localeCompare(b.data)).at(-1)!.data
@@ -208,16 +223,17 @@ export async function POST(req: NextRequest) {
         }
       }
 
-      // Período detectado pelas datas das transações novas (substitui o mês de referência manual)
+      // Período detectado pelas datas das transações novas
       const datas = transacoesParaImportar.map((t) => t.data).sort()
       const periodo = datas.length
         ? { data_inicio: datas[0], data_fim: datas[datas.length - 1], mes_referencia: `${datas[0].slice(0, 7)}-01` }
         : {}
       await supabase.from('extratos').update({ status: 'processado', ...periodo }).eq('id', extrato.id)
       resultados.push({
-        arquivo: file.name,
+        arquivo: nome,
         extrato_id: extrato.id,
         transacoes: transacoesParaImportar.length,
+        ...(unidade.ehImagem ? { prints: unidade.arquivos.length } : {}),
         ...(ignoradas > 0 ? { ignoradas } : {}),
         ...(conciliacao.length > 0 ? { conciliacao } : {}),
       })

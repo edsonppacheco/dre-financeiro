@@ -8,6 +8,32 @@ export type ExtratoExtraido = {
   saldos_dia: { data: string; saldo: number }[]
 }
 
+const REGRAS_EXTRATO = `REGRAS:
+- A linha "Saldo em DATA (início) R$ X" (ou equivalente) é o saldo_inicial; NÃO é transação.
+- Cada transação costuma ter um nome/contraparte e uma categoria + valor. Use descricao = "nome - categoria" quando houver os dois.
+- Linhas soltas de "SALDO DO DIA" / saldo acumulado ao fim de cada data vão em saldos_dia; NÃO são transações.
+- Capture TODOS os valores e TODOS os saldos de fim de dia, com precisão de centavos.
+- O tipo (credito/debito) é só um palpite inicial — capriche nos valores e datas.
+
+Retorne JSON:
+{"saldo_inicial":<numero>,"transacoes":[{"data":"YYYY-MM-DD","descricao":"...","valor":<numero positivo>,"tipo":"credito|debito"}],"saldos_dia":[{"data":"YYYY-MM-DD","saldo":<numero>}]}`
+
+// eslint-disable-next-line @typescript-eslint/no-explicit-any
+function parseRespostaExtrato(response: any): ExtratoExtraido {
+  const content = response.content[0]
+  if (content.type !== 'text') throw new Error('Resposta inesperada da Claude API')
+  if (response.stop_reason === 'max_tokens') {
+    throw new Error('Extrato muito grande para uma única extração. Divida em períodos menores (ex: por semestre) e reenvie.')
+  }
+  const match = content.text.match(/\{[\s\S]*\}/)
+  if (!match) throw new Error('JSON não encontrado na resposta')
+  const parsed = JSON.parse(match[0]) as ExtratoExtraido
+  parsed.saldo_inicial = Number(parsed.saldo_inicial) || 0
+  parsed.transacoes = (parsed.transacoes ?? []).map((t) => ({ ...t, valor: Math.abs(Number(t.valor)) }))
+  parsed.saldos_dia = (parsed.saldos_dia ?? []).map((s) => ({ ...s, saldo: Number(s.saldo) }))
+  return parsed
+}
+
 /**
  * Extrai estrutura de um extrato bancário (texto de PDF) usando a IA.
  * Os sinais (crédito/débito) são um palpite — depois são reconstruídos de forma
@@ -18,40 +44,38 @@ export async function extrairExtratoPDF(texto: string): Promise<ExtratoExtraido>
   const response = await client.messages.create({
     model: 'claude-sonnet-4-6',
     max_tokens: 8000,
-    system: 'Você extrai transações de extratos bancários brasileiros com precisão. Responda SOMENTE com JSON válido, sem texto adicional.',
-    messages: [
-      {
-        role: 'user',
-        content: `Extraia as transações deste extrato bancário.
-
-REGRAS:
-- A linha "Saldo em DATA (início) R$ X" (ou equivalente) é o saldo_inicial; NÃO é transação.
-- Cada transação costuma ter um nome/contraparte e uma categoria + valor. Use descricao = "nome - categoria" quando houver os dois.
-- Linhas soltas de "SALDO DO DIA" / saldo acumulado ao fim de cada data vão em saldos_dia; NÃO são transações.
-- Capture TODOS os valores e TODOS os saldos de fim de dia, com precisão de centavos.
-- O tipo (credito/debito) é só um palpite inicial — capriche nos valores e datas.
-
-Retorne JSON:
-{"saldo_inicial":<numero>,"transacoes":[{"data":"YYYY-MM-DD","descricao":"...","valor":<numero positivo>,"tipo":"credito|debito"}],"saldos_dia":[{"data":"YYYY-MM-DD","saldo":<numero>}]}
-
-TEXTO DO EXTRATO:
-${texto.slice(0, 80000)}`,
-      },
-    ],
+    system: 'Você extrai transações de extratos bancários com precisão. Responda SOMENTE com JSON válido, sem texto adicional.',
+    messages: [{ role: 'user', content: `Extraia as transações deste extrato bancário.\n\n${REGRAS_EXTRATO}\n\nTEXTO DO EXTRATO:\n${texto.slice(0, 80000)}` }],
   })
+  return parseRespostaExtrato(response)
+}
 
-  const content = response.content[0]
-  if (content.type !== 'text') throw new Error('Resposta inesperada da Claude API')
-  if (response.stop_reason === 'max_tokens') {
-    throw new Error('Extrato muito grande para uma única extração. Divida o arquivo em períodos menores (ex: por semestre) e reenvie.')
-  }
-  const match = content.text.match(/\{[\s\S]*\}/)
-  if (!match) throw new Error('JSON não encontrado na resposta')
-  const parsed = JSON.parse(match[0]) as ExtratoExtraido
-  parsed.saldo_inicial = Number(parsed.saldo_inicial) || 0
-  parsed.transacoes = (parsed.transacoes ?? []).map((t) => ({ ...t, valor: Math.abs(Number(t.valor)) }))
-  parsed.saldos_dia = (parsed.saldos_dia ?? []).map((s) => ({ ...s, saldo: Number(s.saldo) }))
-  return parsed
+export type ImagemExtrato = { base64: string; mediaType: 'image/jpeg' | 'image/png' | 'image/gif' | 'image/webp' }
+
+/**
+ * Extrai um extrato a partir de PRINTS de tela (uma ou mais imagens do MESMO
+ * extrato, possivelmente com sobreposição). A IA monta o extrato unindo os
+ * prints em ordem cronológica e remove as linhas repetidas entre prints. Os
+ * sinais são reconstruídos depois pelo solver, como no fluxo de PDF.
+ */
+export async function extrairExtratoImagens(imagens: ImagemExtrato[]): Promise<ExtratoExtraido> {
+  if (!imagens.length) throw new Error('Nenhuma imagem fornecida')
+  const blocosImg = imagens.map((img) => ({
+    type: 'image' as const,
+    source: { type: 'base64' as const, media_type: img.mediaType, data: img.base64 },
+  }))
+  const instrucao = `As imagens acima são PRINTS DE TELA (capturas) de UM MESMO extrato bancário, na ordem em que foram enviadas. Prints consecutivos podem ter SOBREPOSIÇÃO (linhas que aparecem em mais de um print).
+
+Monte o extrato COMPLETO unindo os prints em ordem cronológica e REMOVA as transações repetidas que aparecem em mais de um print (mesma data + valor + descrição = uma transação só). Não invente linhas; transcreva exatamente o que está visível.
+
+${REGRAS_EXTRATO}`
+  const response = await client.messages.create({
+    model: 'claude-sonnet-4-6',
+    max_tokens: 8000,
+    system: 'Você extrai transações de extratos bancários a partir de imagens (prints de tela), com precisão. Responda SOMENTE com JSON válido, sem texto adicional.',
+    messages: [{ role: 'user', content: [...blocosImg, { type: 'text' as const, text: instrucao }] }],
+  })
+  return parseRespostaExtrato(response)
 }
 
 export type Transacao = {
