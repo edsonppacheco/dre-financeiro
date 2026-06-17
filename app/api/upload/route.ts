@@ -93,6 +93,14 @@ export async function POST(req: NextRequest) {
         continue
       }
 
+      // A conta já tinha lançamentos antes deste upload? Define se o saldo
+      // inicial (abertura de TODO o histórico) ainda pode ser estabelecido por
+      // este arquivo. Statements de sub-período (ex: PDF mensal) não devem
+      // sobrescrever a abertura já existente com a abertura do seu período.
+      const { count: txExistentesConta } = await supabase
+        .from('transacoes').select('id', { count: 'exact', head: true }).eq('conta_id', contaId)
+      const contaJaTinhaTransacoes = (txExistentesConta ?? 0) > 0
+
       // ── Deduplicação em nível de TRANSAÇÃO (não de data) ─────────────────────
       // Uma data pode ter várias transações; deduplicar por data descartaria
       // lançamentos novos só porque o dia já tinha algum (era o que impedia Março
@@ -158,11 +166,13 @@ export async function POST(req: NextRequest) {
       // Saldo inicial (1º extrato) e saldos diários do documento (PDF e Excel).
       // Em try/catch para não falhar o upload caso a migração de saldo ainda não exista.
       try {
-        if (saldoInicial !== null) {
-          // Autoritativo (QBO): sobrescreve sempre — o saldo corrente do documento
-          // é a fonte da verdade. Caso geral: só preenche quando ainda está zerado.
-          const q = supabase.from('contas').update({ saldo_inicial: saldoInicial }).eq('id', contaId)
-          await (saldoInicialAutoritativo ? q : q.eq('saldo_inicial', 0))
+        // Só define o saldo inicial (abertura de TODO o histórico) quando:
+        //  - QBO (autoritativo: o saldo corrente do documento é a fonte da verdade), ou
+        //  - a conta ainda não tinha nenhum lançamento (este é o 1º import).
+        // Assim um PDF de sub-período não sobrescreve a abertura com a abertura do
+        // seu próprio período (o que deslocava todos os saldos calculados).
+        if (saldoInicial !== null && (saldoInicialAutoritativo || !contaJaTinhaTransacoes)) {
+          await supabase.from('contas').update({ saldo_inicial: saldoInicial }).eq('id', contaId)
         }
         if (saldosDiaParaImportar.length > 0) {
           await supabase.from('saldos_extrato').insert(
