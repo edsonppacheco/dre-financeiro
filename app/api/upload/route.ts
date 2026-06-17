@@ -51,6 +51,10 @@ export async function POST(req: NextRequest) {
       let transacoes: { data: string; descricao: string; valor: number; tipo: string; conta_contabil_id?: string | null; confianca?: number }[] = []
       let saldoInicial: number | null = null
       let saldosDia: { data: string; saldo: number }[] = []
+      // QBO traz o saldo corrente em cada linha → o saldo inicial é derivado de
+      // forma autoritativa (não é um palpite). Por isso pode sobrescrever um
+      // valor já existente na conta, em vez de só preencher quando está zerado.
+      let saldoInicialAutoritativo = false
       try {
         if (ext === 'pdf') {
           const r = await parsePDF(buffer)
@@ -63,6 +67,7 @@ export async function POST(req: NextRequest) {
           const r = parseQBO(buffer)
           saldoInicial = r.saldoInicial
           saldosDia = r.saldosDia
+          saldoInicialAutoritativo = true
           const { data: plano } = await supabase.from('plano_contas').select('id, codigo')
           const idPorCodigo: Record<string, string> = {}
           for (const p of plano ?? []) idPorCodigo[p.codigo] = p.id
@@ -154,7 +159,10 @@ export async function POST(req: NextRequest) {
       // Em try/catch para não falhar o upload caso a migração de saldo ainda não exista.
       try {
         if (saldoInicial !== null) {
-          await supabase.from('contas').update({ saldo_inicial: saldoInicial }).eq('id', contaId).eq('saldo_inicial', 0)
+          // Autoritativo (QBO): sobrescreve sempre — o saldo corrente do documento
+          // é a fonte da verdade. Caso geral: só preenche quando ainda está zerado.
+          const q = supabase.from('contas').update({ saldo_inicial: saldoInicial }).eq('id', contaId)
+          await (saldoInicialAutoritativo ? q : q.eq('saldo_inicial', 0))
         }
         if (saldosDiaParaImportar.length > 0) {
           await supabase.from('saldos_extrato').insert(
