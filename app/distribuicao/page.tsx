@@ -4,7 +4,7 @@ import { useCallback, useEffect, useState } from 'react'
 import { useEmpresas } from '../_components/EmpresaProvider'
 import { fmtMoeda, type Moeda } from '@/lib/formato'
 
-type Linha = { mes: string; investido: number; recebido: number; saldo: number; acumulado: number }
+type Linha = { mes: string; investido: number; recebido: number; saldo: number; acumuladoBRL: number; acumuladoUSD: number }
 type Serie = { moeda: Moeda; timeline: Linha[] }
 type SerieEmpresa = { empresaId: string; empresaNome: string; moeda: Moeda; timeline: Linha[] }
 type Pessoa = { id: string; nome: string; tipo: 'cliente' | 'fornecedor' | 'sem'; empresas: number; porEmpresa: SerieEmpresa[]; combinado: Serie }
@@ -23,13 +23,16 @@ const MESES_PT = ['Jan', 'Fev', 'Mar', 'Abr', 'Mai', 'Jun', 'Jul', 'Ago', 'Set',
 const rotuloMes = (m: string) => { const [a, mm] = m.split('-'); return `${MESES_PT[Number(mm) - 1]}/${a.slice(2)}` }
 
 // Tabela de timeline: linhas = meses (só os com movimento), colunas = métricas.
+// "Saldo acumulado" é desmembrado em R$ e US$ (cada mês convertido pela taxa do
+// próprio mês e depois acumulado — não se converte o acumulado).
 function TabelaTimeline({ timeline, moeda }: { timeline: Linha[]; moeda: Moeda }) {
   const fmt = (v: number) => fmtMoeda(v, moeda)
-  const linhas = timeline.filter((l) => l.investido !== 0 || l.recebido !== 0 || l.acumulado !== 0)
+  const acumClass = (v: number) => `px-4 py-2 text-right tabular-nums font-medium ${v < 0 ? 'text-red-600' : 'text-slate-800'}`
+  const linhas = timeline.filter((l) => l.investido !== 0 || l.recebido !== 0 || l.acumuladoBRL !== 0 || l.acumuladoUSD !== 0)
   if (!linhas.length) return <p className="text-xs text-slate-400 px-4 py-3">Sem lançamentos no período.</p>
   const totInv = linhas.reduce((s, l) => s + l.investido, 0)
   const totRec = linhas.reduce((s, l) => s + l.recebido, 0)
-  const ultimoAcum = timeline.length ? timeline[timeline.length - 1].acumulado : 0
+  const ult = timeline.length ? timeline[timeline.length - 1] : { acumuladoBRL: 0, acumuladoUSD: 0 }
   return (
     <table className="w-full text-sm">
       <thead>
@@ -38,7 +41,8 @@ function TabelaTimeline({ timeline, moeda }: { timeline: Linha[]; moeda: Moeda }
           <th className="px-4 py-2 text-right font-medium">Investido</th>
           <th className="px-4 py-2 text-right font-medium">Recebido</th>
           <th className="px-4 py-2 text-right font-medium">Saldo</th>
-          <th className="px-4 py-2 text-right font-medium">Saldo acumulado</th>
+          <th className="px-4 py-2 text-right font-medium">Saldo acum. R$</th>
+          <th className="px-4 py-2 text-right font-medium">Saldo acum. US$</th>
         </tr>
       </thead>
       <tbody>
@@ -48,7 +52,8 @@ function TabelaTimeline({ timeline, moeda }: { timeline: Linha[]; moeda: Moeda }
             <td className="px-4 py-2 text-right tabular-nums text-green-700">{l.investido === 0 ? '—' : fmt(l.investido)}</td>
             <td className="px-4 py-2 text-right tabular-nums text-red-600">{l.recebido === 0 ? '—' : fmt(l.recebido)}</td>
             <td className={`px-4 py-2 text-right tabular-nums ${l.saldo < 0 ? 'text-red-600' : l.saldo > 0 ? 'text-green-700' : 'text-slate-400'}`}>{l.saldo === 0 ? '—' : fmt(l.saldo)}</td>
-            <td className={`px-4 py-2 text-right tabular-nums font-medium ${l.acumulado < 0 ? 'text-red-600' : 'text-slate-800'}`}>{fmt(l.acumulado)}</td>
+            <td className={acumClass(l.acumuladoBRL)}>{fmtMoeda(l.acumuladoBRL, 'BRL')}</td>
+            <td className={acumClass(l.acumuladoUSD)}>{fmtMoeda(l.acumuladoUSD, 'USD')}</td>
           </tr>
         ))}
         <tr className="border-t border-slate-200 bg-slate-50 font-semibold text-slate-800">
@@ -56,7 +61,8 @@ function TabelaTimeline({ timeline, moeda }: { timeline: Linha[]; moeda: Moeda }
           <td className="px-4 py-2 text-right tabular-nums text-green-700">{fmt(totInv)}</td>
           <td className="px-4 py-2 text-right tabular-nums text-red-600">{fmt(totRec)}</td>
           <td className={`px-4 py-2 text-right tabular-nums ${totInv - totRec < 0 ? 'text-red-600' : 'text-green-700'}`}>{fmt(totInv - totRec)}</td>
-          <td className={`px-4 py-2 text-right tabular-nums ${ultimoAcum < 0 ? 'text-red-600' : 'text-slate-800'}`}>{fmt(ultimoAcum)}</td>
+          <td className={acumClass(ult.acumuladoBRL)}>{fmtMoeda(ult.acumuladoBRL, 'BRL')}</td>
+          <td className={acumClass(ult.acumuladoUSD)}>{fmtMoeda(ult.acumuladoUSD, 'USD')}</td>
         </tr>
       </tbody>
     </table>
@@ -137,7 +143,7 @@ export default function DistribuicaoPage() {
                     {p.empresas > 1 && <span className="text-[11px] px-1.5 py-0.5 rounded-full bg-violet-50 text-violet-600">{p.empresas} empresas</span>}
                   </span>
                   <span className="text-sm tabular-nums text-slate-500">
-                    Acum.: {fmtMoeda(p.combinado.timeline.at(-1)?.acumulado ?? 0, p.combinado.moeda)}
+                    Acum.: {fmtMoeda(p.combinado.timeline.at(-1)?.acumuladoBRL ?? 0, 'BRL')} · {fmtMoeda(p.combinado.timeline.at(-1)?.acumuladoUSD ?? 0, 'USD')}
                   </span>
                 </button>
                 {aberto && (
