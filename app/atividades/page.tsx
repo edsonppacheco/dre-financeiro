@@ -33,12 +33,13 @@ export default function AtividadesPage() {
   const [ativs, setAtivs] = useState<Atividade[]>([])
   const [loading, setLoading] = useState(true)
   const [erro, setErro] = useState<string | null>(null)
+  const [pendente, setPendente] = useState(false)
   const [filtro, setFiltro] = useState('')
 
   useEffect(() => {
     fetch('/api/atividades?limite=300')
       .then((r) => r.json())
-      .then((d) => { if (d.error) throw new Error(d.error); setAtivs(d.atividades) })
+      .then((d) => { if (d.error) throw new Error(d.error); setAtivs(d.atividades); setPendente(!!d.pendente) })
       .catch((e) => setErro(e.message))
       .finally(() => setLoading(false))
   }, [])
@@ -72,7 +73,12 @@ export default function AtividadesPage() {
         </div>
       </div>
 
-      {filtradas.length === 0 ? (
+      {pendente ? (
+        <div className="bg-amber-50 border border-amber-200 text-amber-800 text-sm rounded-xl px-4 py-4">
+          <p className="font-medium mb-1">Log de atividades ainda não ativado</p>
+          <p>A tabela <code className="bg-amber-100 px-1 rounded">atividades</code> precisa ser criada no banco (migration 011). Depois disso, as ações passam a ser registradas aqui automaticamente.</p>
+        </div>
+      ) : filtradas.length === 0 ? (
         <div className="bg-white rounded-xl border border-slate-200 p-12 text-center text-slate-400">
           <p className="text-4xl mb-3">🕓</p>
           <p className="font-medium">Nenhuma atividade registrada</p>

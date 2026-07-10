@@ -16,7 +16,13 @@ export async function GET(req: NextRequest) {
       .limit(limite)
     if (acao) q = q.eq('acao', acao)
     const { data, error } = await q
-    if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    if (error) {
+      // Tabela ainda não migrada: trata como "log não ativado" (não é erro fatal).
+      if (/atividades/.test(error.message) && /schema cache|does not exist|não existe/i.test(error.message)) {
+        return NextResponse.json({ atividades: [], pendente: true })
+      }
+      return NextResponse.json({ error: error.message }, { status: 500 })
+    }
     return NextResponse.json({ atividades: data ?? [] })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
