@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { useEmpresas } from '../_components/EmpresaProvider'
+import Combobox, { type Opcao } from '../_components/Combobox'
 import { fmtMoeda, type Moeda } from '@/lib/formato'
 
 type Conta = {
@@ -44,6 +45,8 @@ const fmtNum = (v: number) => v.toLocaleString('pt-BR', { minimumFractionDigits:
 const parseNum = (s: string) => Number(String(s).replace(/\./g, '').replace(',', '.')) || 0
 const NOVO_CLIENTE = '__novo_cliente__'
 const NOVO_FORNECEDOR = '__novo_fornecedor__'
+const pessoaValueDe = (l: { cliente_id: string | null; fornecedor_id: string | null }) =>
+  l.cliente_id ? `c:${l.cliente_id}` : l.fornecedor_id ? `f:${l.fornecedor_id}` : ''
 
 export default function ContasExtratoPage() {
   const { selecionadas: empresasSelecionadas } = useEmpresas()
@@ -53,8 +56,13 @@ export default function ContasExtratoPage() {
   const [loading, setLoading] = useState(false)
   const [erro, setErro] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
-  const [mes, setMes] = useState('')
   const [modalNovo, setModalNovo] = useState(false)
+
+  // Filtros (client-side sobre os lançamentos já carregados)
+  const [fAno, setFAno] = useState('')            // '' = todos os anos
+  const [fMeses, setFMeses] = useState<Set<number>>(new Set()) // meses 1-12; vazio = todos
+  const [fPessoa, setFPessoa] = useState('')      // pessoaValue: 'c:..' | 'f:..' | '' = todos
+  const [fConta, setFConta] = useState('')        // conta_contabil_id | '__sem__' | '' = todos
 
   // form de lançamento manual
   const [nData, setNData] = useState('')
@@ -70,54 +78,82 @@ export default function ContasExtratoPage() {
     fetch('/api/contas').then((r) => r.json()).then((d) => {
       if (!d.contas) return
       setContas(d.contas)
-      // Restaura a última visualização (conta + período)
       const savedConta = typeof window !== 'undefined' ? localStorage.getItem('extrato_conta') : null
-      const savedMes = typeof window !== 'undefined' ? localStorage.getItem('extrato_mes') : null
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const existe = d.contas.find((c: any) => c.id === savedConta)
       setContaId(existe ? savedConta! : d.contas[0]?.id ?? '')
-      if (savedMes) setMes(savedMes)
     })
   }, [])
 
-  // Salva a última visualização
-  useEffect(() => {
-    if (typeof window === 'undefined' || !contaId) return
-    localStorage.setItem('extrato_conta', contaId)
-    localStorage.setItem('extrato_mes', mes)
-  }, [contaId, mes])
+  useEffect(() => { if (typeof window !== 'undefined' && contaId) localStorage.setItem('extrato_conta', contaId) }, [contaId])
 
-  const carregar = useCallback((id: string, mesArg: string) => {
+  // Carrega TODOS os lançamentos da conta; a filtragem por período/pessoa/conta
+  // é feita client-side (o saldo do dia vem calculado sobre todo o histórico).
+  const carregar = useCallback((id: string) => {
     if (!id) return
-    const qs = mesArg ? `&mes=${mesArg}` : ''
-    fetch(`/api/extrato?conta_id=${id}${qs}`)
+    fetch(`/api/extrato?conta_id=${id}`)
       .then((r) => r.json())
       .then((d) => { if (d.error) throw new Error(d.error); setExt(d) })
       .catch((e) => setErro(e.message))
       .finally(() => setLoading(false))
   }, [])
 
-  useEffect(() => { if (contaId) carregar(contaId, mes) }, [contaId, mes, carregar])
+  useEffect(() => { if (contaId) carregar(contaId) }, [contaId, carregar])
 
   const planoFolhas = useMemo(
     () => (ext?.planoContas ?? []).filter((p) => p.tipo !== 'grupo'),
     [ext]
   )
+  const moedaConta = ext?.conta.empresas?.moeda ?? 'BRL'
 
-  const anosDosMeses = useMemo(
-    () => Array.from(new Set((ext?.meses ?? []).map((m) => m.split('-')[0]))),
-    [ext]
-  )
+  // Anos disponíveis e meses do ano selecionado (para o filtro de período)
+  const anos = useMemo(() => Array.from(new Set((ext?.lancamentos ?? []).map((l) => l.data.slice(0, 4)))).sort().reverse(), [ext])
+  const mesesDoAno = useMemo(() => {
+    const set = new Set<number>()
+    for (const l of ext?.lancamentos ?? []) if (!fAno || l.data.startsWith(fAno)) set.add(Number(l.data.slice(5, 7)))
+    return Array.from(set).sort((a, b) => a - b)
+  }, [ext, fAno])
 
-  // agrupa lançamentos por dia (já vêm em ordem cronológica)
+  // Lançamentos após os filtros client-side (ano, meses, pessoa, conta contábil)
+  const lancamentosFiltrados = useMemo(() => (ext?.lancamentos ?? []).filter((l) => {
+    if (fAno && !l.data.startsWith(fAno)) return false
+    if (fMeses.size && !fMeses.has(Number(l.data.slice(5, 7)))) return false
+    if (fPessoa && pessoaValueDe(l) !== fPessoa) return false
+    if (fConta === '__sem__' ? !!l.conta_contabil_id : fConta && l.conta_contabil_id !== fConta) return false
+    return true
+  }), [ext, fAno, fMeses, fPessoa, fConta])
+
   const dias = useMemo(() => {
     const map = new Map<string, Lancamento[]>()
-    for (const l of ext?.lancamentos ?? []) {
-      if (!map.has(l.data)) map.set(l.data, [])
-      map.get(l.data)!.push(l)
-    }
+    for (const l of lancamentosFiltrados) { if (!map.has(l.data)) map.set(l.data, []); map.get(l.data)!.push(l) }
     return Array.from(map.entries()).map(([data, lancs]) => ({ data, lancs }))
-  }, [ext])
+  }, [lancamentosFiltrados])
+
+  // Opções dos comboboxes de linha (pessoa e conta contábil), compartilhadas
+  const pessoaOpcoes: Opcao[] = useMemo(() => [
+    { value: '', label: '—' },
+    { value: NOVO_CLIENTE, label: '➕ Novo cliente…', fixa: true },
+    { value: NOVO_FORNECEDOR, label: '➕ Novo fornecedor…', fixa: true },
+    ...(ext?.clientes ?? []).map((c) => ({ value: `c:${c.id}`, label: c.nome, grupo: 'Clientes' })),
+    ...(ext?.fornecedores ?? []).map((f) => ({ value: `f:${f.id}`, label: f.nome, grupo: 'Fornecedores' })),
+  ], [ext])
+  const contaOpcoes: Opcao[] = useMemo(() => [
+    { value: '', label: '—' },
+    ...planoFolhas.map((p) => ({ value: p.id, label: `${p.codigo} · ${p.nome}`, grupo: 'Conta contábil' })),
+    ...contas.filter((c) => c.id !== contaId).map((c) => ({ value: `transf:${c.id}`, label: `⇄ ${c.nome}${c.empresas?.moeda && c.empresas.moeda !== moedaConta ? ` (${c.empresas.moeda})` : ''}`, grupo: 'Transferência para' })),
+  ], [planoFolhas, contas, contaId, moedaConta])
+
+  // Opções dos filtros do topo
+  const filtroPessoaOpcoes: Opcao[] = useMemo(() => [
+    { value: '', label: 'Cliente/Fornecedor: todos' },
+    ...(ext?.clientes ?? []).map((c) => ({ value: `c:${c.id}`, label: c.nome, grupo: 'Clientes' })),
+    ...(ext?.fornecedores ?? []).map((f) => ({ value: `f:${f.id}`, label: f.nome, grupo: 'Fornecedores' })),
+  ], [ext])
+  const filtroContaOpcoes: Opcao[] = useMemo(() => [
+    { value: '', label: 'Conta contábil: todas' },
+    { value: '__sem__', label: '(sem conta contábil)' },
+    ...planoFolhas.map((p) => ({ value: p.id, label: `${p.codigo} · ${p.nome}` })),
+  ], [planoFolhas])
 
   const patch = async (body: Record<string, unknown>) => {
     setBusy(true); setErro(null)
@@ -125,7 +161,7 @@ export default function ContasExtratoPage() {
       const res = await fetch('/api/extrato', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) })
       const d = await res.json()
       if (d.error) throw new Error(d.error)
-      carregar(contaId, mes)
+      carregar(contaId)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
 
@@ -138,14 +174,14 @@ export default function ContasExtratoPage() {
       const d = await res.json()
       if (d.error) throw new Error(d.error)
       setModalNovo(false); setNDescricao(''); setNValor('')
-      carregar(contaId, mes)
+      carregar(contaId)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
 
   const remover = async (l: Lancamento) => {
     if (!confirm(`Remover o lançamento "${l.descricao}"?`)) return
     setBusy(true)
-    try { await fetch(`/api/extrato?id=${l.id}`, { method: 'DELETE' }); carregar(contaId, mes) } finally { setBusy(false) }
+    try { await fetch(`/api/extrato?id=${l.id}`, { method: 'DELETE' }); carregar(contaId) } finally { setBusy(false) }
   }
   // confirma a sugestão automática (some o índice de confiança)
   const confirmarSugestao = (l: Lancamento) => patch({ id: l.id, confirmar: true })
@@ -175,7 +211,7 @@ export default function ContasExtratoPage() {
     try {
       const d = await fetch('/api/conciliacao', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ remover }) }).then((r) => r.json())
       if (d.error) throw new Error(d.error)
-      setConcModal(false); carregar(contaId, mes)
+      setConcModal(false); carregar(contaId)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
   const toggleConc = (id: string) => setConcSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
@@ -201,7 +237,7 @@ export default function ContasExtratoPage() {
       // vincula ao lançamento e recarrega (traz a nova pessoa na lista)
       await fetch('/api/extrato', { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: pessoaModal.lancamentoId, ...campo }) })
       setPessoaModal(null)
-      carregar(contaId, mes)
+      carregar(contaId)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
 
@@ -227,7 +263,6 @@ export default function ContasExtratoPage() {
     if (contasView.length && !contasView.some((c) => c.id === contaId)) setContaId(contasView[0].id)
   }
 
-  const moedaConta = ext?.conta.empresas?.moeda ?? 'BRL'
   const fmt = useCallback((v: number) => fmtMoeda(v, moedaConta), [moedaConta])
 
   // marca/desmarca um lançamento existente como transferência para outra conta
@@ -250,7 +285,7 @@ export default function ContasExtratoPage() {
       const d = await fetch('/api/transferencias', { method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ lancamento_id: l.id, conta_destino_id: destinoId, valor_contraparte: valorContraparte }) }).then((r) => r.json())
       if (d.error) throw new Error(d.error)
-      carregar(contaId, mes)
+      carregar(contaId)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
   const desfazerTransferencia = async (l: Lancamento) => {
@@ -258,40 +293,61 @@ export default function ContasExtratoPage() {
     try {
       const d = await fetch(`/api/transferencias?lancamento_id=${l.id}`, { method: 'DELETE' }).then((r) => r.json())
       if (d.error) throw new Error(d.error)
-      carregar(contaId, mes)
+      carregar(contaId)
     } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setBusy(false) }
   }
 
   return (
     <div className="max-w-5xl mx-auto">
-      <div className="mb-6 flex flex-wrap items-end justify-between gap-3">
+      <div className="mb-4 flex flex-wrap items-start justify-between gap-3">
         <div>
           <h1 className="text-2xl font-bold text-slate-800">Contas</h1>
           <p className="text-slate-500 mt-1">Extrato cronológico, saldos diários e classificação</p>
         </div>
         <div className="flex items-center gap-2">
-          <select value={contaId} onChange={(e) => { setContaId(e.target.value); setMes('') }} className="border border-slate-300 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-slate-500">
-            {contas.length === 0 && <option value="">Nenhuma conta</option>}
-            {correntes.length > 0 && <optgroup label="🏦 Contas correntes">{correntes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
-            {cartoes.length > 0 && <optgroup label="💳 Cartões">{cartoes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
-            {emprestimos.length > 0 && <optgroup label="💰 Empréstimos">{emprestimos.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
-          </select>
-          <select value={mes} onChange={(e) => setMes(e.target.value)} className="border border-slate-300 rounded-lg px-3 py-2 text-sm bg-white focus:outline-none focus:ring-2 focus:ring-slate-500" title="Filtrar por período">
-            <option value="">📅 Todos os períodos</option>
-            {anosDosMeses.map((ano) => (
-              <optgroup key={ano} label={ano}>
-                {(ext?.meses ?? []).filter((m) => m.startsWith(ano)).map((m) => {
-                  const mm = Number(m.split('-')[1])
-                  return <option key={m} value={m}>{MESES_PT[mm - 1]}</option>
-                })}
-              </optgroup>
-            ))}
-          </select>
+          <div className="relative">
+            <select value={contaId} onChange={(e) => setContaId(e.target.value)} className="appearance-none border border-slate-300 rounded-lg pl-3 pr-8 py-2 text-sm bg-white hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500">
+              {contas.length === 0 && <option value="">Nenhuma conta</option>}
+              {correntes.length > 0 && <optgroup label="🏦 Contas correntes">{correntes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
+              {cartoes.length > 0 && <optgroup label="💳 Cartões">{cartoes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
+              {emprestimos.length > 0 && <optgroup label="💰 Empréstimos">{emprestimos.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}</optgroup>}
+            </select>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400"><path d="M6 9l6 6 6-6" /></svg>
+          </div>
           <button onClick={conciliar} disabled={!contaId} className="bg-white border border-slate-300 text-slate-700 text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">⚖ Conciliar</button>
           <button onClick={() => { setModalNovo(true); setNData('') }} disabled={!contaId} className="bg-slate-800 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">+ Lançamento</button>
           <Link href="/contas/gerenciar" className="text-sm text-slate-500 hover:text-slate-800 px-3 py-2 border border-slate-200 rounded-lg">⚙ Gerenciar</Link>
         </div>
       </div>
+
+      {/* Barra de filtros */}
+      {ext && (
+        <div className="mb-4 bg-white border border-slate-200 rounded-xl px-4 py-3 flex flex-wrap items-center gap-3">
+          <div className="relative">
+            <select value={fAno} onChange={(e) => { setFAno(e.target.value); setFMeses(new Set()) }} className="appearance-none border border-slate-300 rounded-lg pl-3 pr-8 py-1.5 text-sm bg-white hover:border-slate-400 focus:outline-none focus:ring-2 focus:ring-slate-500">
+              <option value="">Todos os anos</option>
+              {anos.map((a) => <option key={a} value={a}>{a}</option>)}
+            </select>
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" className="w-4 h-4 absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400"><path d="M6 9l6 6 6-6" /></svg>
+          </div>
+          <div className="flex flex-wrap gap-1">
+            {mesesDoAno.map((m) => {
+              const on = fMeses.has(m)
+              return (
+                <button key={m} onClick={() => setFMeses((s) => { const n = new Set(s); if (n.has(m)) n.delete(m); else n.add(m); return n })}
+                  className={`text-xs px-2 py-1 rounded-md border ${on ? 'bg-slate-800 text-white border-slate-800' : 'bg-white text-slate-600 border-slate-200 hover:border-slate-400'}`}>
+                  {MESES_PT[m - 1].slice(0, 3)}
+                </button>
+              )
+            })}
+            {fMeses.size > 0 && <button onClick={() => setFMeses(new Set())} className="text-xs px-2 py-1 text-slate-400 hover:text-slate-600">limpar</button>}
+          </div>
+          <div className="ml-auto flex items-center gap-2">
+            <Combobox value={fPessoa} opcoes={filtroPessoaOpcoes} onChange={setFPessoa} placeholder="Cliente/Fornecedor: todos" className="w-52" />
+            <Combobox value={fConta} opcoes={filtroContaOpcoes} onChange={setFConta} placeholder="Conta contábil: todas" className="w-52" />
+          </div>
+        </div>
+      )}
 
       {erro && <div className="mb-4 bg-red-50 border border-red-200 text-red-700 text-sm rounded-lg px-4 py-3">{erro}</div>}
 
@@ -331,26 +387,9 @@ export default function ContasExtratoPage() {
                       </div>
                     ) : (
                       <>
-                        <select value={pessoaValue(l)} disabled={busy} onChange={(e) => onPessoaChange(l, e.target.value)} className="border border-slate-200 rounded px-2 py-1 text-xs w-full">
-                          <option value="">—</option>
-                          <option value={NOVO_CLIENTE}>➕ Novo cliente…</option>
-                          <option value={NOVO_FORNECEDOR}>➕ Novo fornecedor…</option>
-                          <optgroup label="Clientes">{ext.clientes.map((c) => <option key={c.id} value={`c:${c.id}`}>{c.nome}</option>)}</optgroup>
-                          <optgroup label="Fornecedores">{ext.fornecedores.map((f) => <option key={f.id} value={`f:${f.id}`}>{f.nome}</option>)}</optgroup>
-                        </select>
-                        <select value={l.conta_contabil_id ?? ''} disabled={busy}
-                          onChange={(e) => { const v = e.target.value; if (v.startsWith('transf:')) marcarTransferencia(l, v.slice(7)); else patch({ id: l.id, conta_contabil_id: v }) }}
-                          className="border border-slate-200 rounded px-2 py-1 text-xs w-full">
-                          <option value="">—</option>
-                          {planoFolhas.map((p) => <option key={p.id} value={p.id}>{p.codigo} · {p.nome}</option>)}
-                          <optgroup label="⇄ Transferência para">
-                            {contas.filter((c) => c.id !== contaId).map((c) => (
-                              <option key={c.id} value={`transf:${c.id}`}>
-                                {c.nome}{c.empresas?.moeda && c.empresas.moeda !== moedaConta ? ` (${c.empresas.moeda})` : ''}
-                              </option>
-                            ))}
-                          </optgroup>
-                        </select>
+                        <Combobox value={pessoaValue(l)} opcoes={pessoaOpcoes} disabled={busy} placeholder="—" onChange={(v) => onPessoaChange(l, v)} />
+                        <Combobox value={l.conta_contabil_id ?? ''} opcoes={contaOpcoes} disabled={busy} placeholder="—"
+                          onChange={(v) => { if (v.startsWith('transf:')) marcarTransferencia(l, v.slice(7)); else patch({ id: l.id, conta_contabil_id: v }) }} />
                       </>
                     )}
                     <div className="flex items-center justify-end gap-1">
