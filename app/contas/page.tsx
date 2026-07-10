@@ -180,17 +180,6 @@ export default function ContasExtratoPage() {
   }
   const toggleConc = (id: string) => setConcSel((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n })
 
-  const [sugerindo, setSugerindo] = useState(false)
-  const sugerirContas = async () => {
-    setSugerindo(true); setErro(null)
-    try {
-      const res = await fetch('/api/classificar-contabil', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ conta_id: contaId }) })
-      const d = await res.json()
-      if (d.error) throw new Error(d.error)
-      carregar(contaId, mes)
-    } catch (e) { setErro(e instanceof Error ? e.message : 'Erro') } finally { setSugerindo(false) }
-  }
-
   const pessoaValue = (l: Lancamento) => l.cliente_id ? `c:${l.cliente_id}` : l.fornecedor_id ? `f:${l.fornecedor_id}` : ''
   const onPessoaChange = (l: Lancamento, v: string) => {
     if (v === NOVO_CLIENTE) { setPessoaModal({ tipo: 'cliente', lancamentoId: l.id }); setPNome(''); return }
@@ -298,7 +287,6 @@ export default function ContasExtratoPage() {
               </optgroup>
             ))}
           </select>
-          <button onClick={sugerirContas} disabled={!contaId || sugerindo} className="bg-violet-600 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-violet-700 disabled:opacity-50">{sugerindo ? 'Classificando…' : '✨ Sugerir contas'}</button>
           <button onClick={conciliar} disabled={!contaId} className="bg-white border border-slate-300 text-slate-700 text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-50 disabled:opacity-50">⚖ Conciliar</button>
           <button onClick={() => { setModalNovo(true); setNData('') }} disabled={!contaId} className="bg-slate-800 text-white text-sm font-semibold px-3 py-2 rounded-lg hover:bg-slate-700 disabled:opacity-50">+ Lançamento</button>
           <Link href="/contas/gerenciar" className="text-sm text-slate-500 hover:text-slate-800 px-3 py-2 border border-slate-200 rounded-lg">⚙ Gerenciar</Link>
@@ -339,7 +327,7 @@ export default function ContasExtratoPage() {
                       <div className="col-span-2 text-xs text-slate-500 flex items-center gap-1.5">
                         <span className="px-1.5 py-0.5 rounded bg-violet-100 text-violet-700 font-medium whitespace-nowrap">⇄ Transferência</span>
                         <span className="truncate">{l.tipo === 'debito' ? 'para' : 'de'} {l.transferencia_contraparte ?? '—'}</span>
-                        <button onClick={() => desfazerTransferencia(l)} disabled={busy} className="text-slate-400 hover:text-red-500 ml-auto" title="Desfazer transferência">✕</button>
+                        <button onClick={() => desfazerTransferencia(l)} disabled={busy} className="ml-auto text-xs font-medium text-slate-500 hover:text-red-600 border border-slate-200 hover:border-red-200 rounded px-2 py-0.5 whitespace-nowrap" title="Reverte a transferência: remove o espelho e o lançamento volta a ser editável">↩ Desfazer</button>
                       </div>
                     ) : (
                       <>

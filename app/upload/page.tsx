@@ -111,6 +111,13 @@ export default function UploadPage() {
             })
           )
         )
+        // Sugere automaticamente conta contábil + cliente/fornecedor (antes era o
+        // botão manual "Sugerir contas" na tela de Contas). Roda 1x por conta.
+        await fetch('/api/classificar-contabil', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ conta_id: contaId }),
+        }).catch(() => {})
       }
 
       setState('done')
