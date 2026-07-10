@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase'
+import { registrarAtividade } from '@/lib/atividades'
 
 const CAMPOS = 'id, nome, cnpj, email, telefone, endereco, razao_social, created_at'
 const EDITAVEIS = ['nome', 'cnpj', 'email', 'telefone', 'endereco', 'razao_social'] as const
@@ -56,6 +57,7 @@ export function criarHandlers(tabela: 'clientes' | 'fornecedores') {
       const supabase = createSupabaseAdminClient()
       const { data, error } = await supabase.from(tabela).insert(row).select(CAMPOS).single()
       if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+      await registrarAtividade(supabase, { acao: 'criar_pessoa', entidade: tabela === 'clientes' ? 'cliente' : 'fornecedor', entidade_id: data.id, descricao: `${tabela === 'clientes' ? 'Cliente' : 'Fornecedor'} criado: "${data.nome}"` })
       return NextResponse.json({ pessoa: data })
     } catch (err: unknown) {
       return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })

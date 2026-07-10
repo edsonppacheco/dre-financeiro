@@ -5,6 +5,7 @@ import { excelParaTexto } from '@/lib/parsers/excel'
 import { parsePDF, parseTextoExtrato } from '@/lib/parsers/pdf'
 import { ehArquivoQBO, parseQBO, mapearCategoriaQBO } from '@/lib/parsers/qbo'
 import { ehImagem, parseExtratoImagens } from '@/lib/parsers/imagem'
+import { registrarAtividade } from '@/lib/atividades'
 
 // Extração por IA (texto ou visão) de extratos grandes pode demorar.
 export const maxDuration = 300
@@ -229,6 +230,11 @@ export async function POST(req: NextRequest) {
         ? { data_inicio: datas[0], data_fim: datas[datas.length - 1], mes_referencia: `${datas[0].slice(0, 7)}-01` }
         : {}
       await supabase.from('extratos').update({ status: 'processado', ...periodo }).eq('id', extrato.id)
+      await registrarAtividade(supabase, {
+        acao: 'upload', entidade: 'extrato', entidade_id: extrato.id,
+        descricao: `Extrato "${nome}" importado: ${transacoesParaImportar.length} lançamento(s)${ignoradas > 0 ? `, ${ignoradas} ignorado(s)` : ''}`,
+        dados: { conta_id: contaId, transacoes: transacoesParaImportar.length, ignoradas, periodo },
+      })
       resultados.push({
         arquivo: nome,
         extrato_id: extrato.id,

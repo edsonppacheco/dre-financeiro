@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
 import { obterCambioMensal } from '@/lib/cambio'
+import { registrarAtividade } from '@/lib/atividades'
 
 // Histórico longo (vários anos) pode exigir buscar muitos meses na AwesomeAPI.
 export const maxDuration = 120
@@ -61,6 +62,7 @@ export async function POST(req: NextRequest) {
     const atualizados = resultados.filter((r) => r.ok).map((r) => r.mes)
     const comErro = resultados.filter((r) => !r.ok).map((r) => ({ mes: r.mes, erro: (r as { erro: string }).erro }))
 
+    if (atualizados.length) await registrarAtividade(supabase, { acao: 'cambio', entidade: 'cambio', descricao: `Câmbio atualizado: ${atualizados.length} mês(es)`, dados: { atualizados, comErro: comErro.length } })
     return NextResponse.json({ atualizados, comErro, totalMeses: meses.length })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })

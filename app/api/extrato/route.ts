@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase'
+import { registrarAtividade } from '@/lib/atividades'
 import { extrairChave } from '@/lib/classificador-contabil'
 
 // Aprendizado: ao definir a conta contábil de um lançamento, guarda/reforça a
@@ -122,6 +123,7 @@ export async function PATCH(req: NextRequest) {
       if (body.fornecedor_id) await aprenderPessoa(supabase, data.descricao, 'fornecedor_id', body.fornecedor_id)
     }
 
+    if (data) await registrarAtividade(supabase, { acao: 'editar_lancamento', entidade: 'transacao', entidade_id: data.id, descricao: `Lançamento editado: "${data.descricao}"`, dados: { campos: Object.keys(update) } })
     return NextResponse.json({ lancamento: data })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
@@ -152,6 +154,7 @@ export async function POST(req: NextRequest) {
       .select('id')
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    await registrarAtividade(supabase, { acao: 'criar_lancamento', entidade: 'transacao', entidade_id: data.id, descricao: `Lançamento manual criado: "${b.descricao}" (${b.tipo}, ${valor})`, dados: { conta_id: b.conta_id, data: b.data } })
     return NextResponse.json({ id: data.id })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
@@ -176,6 +179,7 @@ export async function DELETE(req: NextRequest) {
 
     const { error } = await supabase.from('transacoes').delete().eq('id', id)
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    await registrarAtividade(supabase, { acao: 'remover_lancamento', entidade: 'transacao', entidade_id: id, descricao: 'Lançamento removido' })
     return NextResponse.json({ ok: true })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })

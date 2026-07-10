@@ -12,6 +12,7 @@ const icones: Record<string, ReactNode> = {
   contas: I(<><rect x="4" y="3" width="16" height="18" rx="2" /><path d="M8 8h8M8 12h8M8 16h5" /></>),
   relatorios: I(<><path d="M4 20V10M10 20V4M16 20v-7M22 20H2" /></>),
   distribuicao: I(<><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6" /></>),
+  atividades: I(<><circle cx="12" cy="12" r="9" /><path d="M12 7v5l3 2" /></>),
   clientes: I(<><circle cx="9" cy="8" r="3" /><path d="M3 20a6 6 0 0 1 12 0M16 5a3 3 0 0 1 0 6M21 20a6 6 0 0 0-5-5.9" /></>),
   fornecedores: I(<><path d="M3 7h11v8H3zM14 10h4l3 3v2h-7z" /><circle cx="7" cy="17" r="1.6" /><circle cx="17" cy="17" r="1.6" /></>),
   upload: I(<><path d="M12 16V4M7 9l5-5 5 5M5 20h14" /></>),
@@ -26,6 +27,7 @@ const LINKS = [
   { href: '/clientes', label: 'Clientes', icon: 'clientes' },
   { href: '/fornecedores', label: 'Fornecedores', icon: 'fornecedores' },
   { href: '/upload', label: 'Upload', icon: 'upload' },
+  { href: '/atividades', label: 'Atividades', icon: 'atividades' },
   { href: '/configuracoes', label: 'Configurações', icon: 'config' },
 ]
 

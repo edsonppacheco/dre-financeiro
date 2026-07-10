@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase'
+import { registrarAtividade } from '@/lib/atividades'
 
 const MOEDAS = ['BRL', 'USD']
 
@@ -26,6 +27,7 @@ export async function POST(req: NextRequest) {
       .select('id, nome, moeda, pais, created_at')
       .single()
     if (error) return NextResponse.json({ error: error.message }, { status: 500 })
+    await registrarAtividade(supabase, { acao: 'criar_empresa', entidade: 'empresa', entidade_id: data.id, descricao: `Empresa criada: "${data.nome}" (${data.moeda})` })
     return NextResponse.json({ empresa: data })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })

@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase'
+import { registrarAtividade } from '@/lib/atividades'
 
 // POST { lancamento_id, conta_destino_id, valor_contraparte? }
 // Marca um lançamento JÁ EXISTENTE (que chegou no extrato) como transferência
@@ -82,6 +83,7 @@ export async function POST(req: NextRequest) {
       descricao: tipoEspelho === 'credito' ? `Transferência de ${nome(l.conta_id)}` : `Transferência para ${nome(l.conta_id)}`,
     })
 
+    await registrarAtividade(supabase, { acao: 'transferencia', entidade: 'transferencia', entidade_id: transf.id, descricao: `Transferência marcada: ${nome(origem)} → ${nome(destino)} (${valorNaOrigem})`, dados: { valor: valorNaOrigem, valor_destino: valorNaDestino } })
     return NextResponse.json({ id: transf.id })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
@@ -103,6 +105,7 @@ export async function DELETE(req: NextRequest) {
     await supabase.from('transacoes').update({ transferencia_id: null }).eq('id', l.id)
     await supabase.from('transacoes').delete().eq('transferencia_id', l.transferencia_id).neq('id', l.id)
     await supabase.from('transferencias').delete().eq('id', l.transferencia_id)
+    await registrarAtividade(supabase, { acao: 'desfazer_transferencia', entidade: 'transferencia', entidade_id: l.transferencia_id, descricao: 'Transferência desfeita' })
     return NextResponse.json({ ok: true })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
