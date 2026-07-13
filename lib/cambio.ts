@@ -109,6 +109,32 @@ export function converterComTaxas(valor: number, de: Moeda, para: Moeda, mes: st
   return Math.round(v * 100) / 100
 }
 
+/**
+ * Retorna a ÚLTIMA cotação disponível (mês mais recente com taxa registrada em
+ * cambio_mensal), independente dos meses envolvidos na visão. É a taxa usada nas
+ * visões consolidadas em qualquer moeda — assim Painel, DRE, Distribuição e
+ * Planejamento convertem tudo pela mesma cotação (a mais recente) e batem entre si.
+ * Não busca na AwesomeAPI dentro do request (só lê do banco); null se não houver nenhuma.
+ */
+export async function obterUltimaTaxa(): Promise<number | null> {
+  const supabase = createSupabaseAdminClient()
+  const { data } = await supabase
+    .from('cambio_mensal')
+    .select('taxa, mes')
+    .eq('moeda_origem', 'USD').eq('moeda_destino', 'BRL')
+    .order('mes', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  return data ? Number(data.taxa) : null
+}
+
+/** Conversão síncrona usando uma única taxa (USD→BRL). Sem taxa, devolve o valor original. */
+export function converterComUltima(valor: number, de: Moeda, para: Moeda, taxa: number | null): number {
+  if (de === para || !taxa) return valor
+  const v = de === 'USD' ? valor * taxa : valor / taxa
+  return Math.round(v * 100) / 100
+}
+
 /** Conversão pontual (busca/persiste a taxa do mês se necessário). Use obterTaxasMensais + converterComTaxas para lotes. */
 export async function converter(valor: number, de: Moeda, para: Moeda, mes: string): Promise<number> {
   if (de === para) return valor

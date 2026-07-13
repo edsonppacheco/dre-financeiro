@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
-import { obterTaxasMensais } from '@/lib/cambio'
+import { obterUltimaTaxa } from '@/lib/cambio'
 import type { Moeda } from '@/lib/formato'
 import { montarEscopo, criarConversor, distribuirWaterfall, statusReceita, round, hojeISO, mesDe } from '@/lib/planejamento'
 import { registrarAtividade } from '@/lib/atividades'
 
 // Trata "tabela ainda não migrada" como conjunto vazio (mesmo padrão de /api/atividades)
-const naoMigrada = (msg?: string) => !!msg && /relation .* does not exist|could not find the table/i.test(msg)
+const naoMigrada = (msg?: string) => !!msg && /relation .* does not exist|could not find the table|column .* does not exist/i.test(msg)
 
-type Linha = { id: string; empresa_id: string; cliente_id: string; data_prevista: string; valor_previsto: number; descricao: string | null }
+type Linha = { id: string; empresa_id: string; cliente_id: string | null; fornecedor_id: string | null; data_prevista: string; valor_previsto: number; descricao: string | null }
+// Chave da contraparte: c:<id> para cliente, f:<id> para fornecedor
+const chave = (clienteId: string | null, fornecedorId: string | null) => clienteId ? `c:${clienteId}` : (fornecedorId ? `f:${fornecedorId}` : '')
+const tipoDaChave = (k: string): 'cliente' | 'fornecedor' => (k.startsWith('c:') ? 'cliente' : 'fornecedor')
+const idDaChave = (k: string) => k.slice(2)
 
 // GET /api/planejamento/receitas?empresas=&moeda=
-// Previsões agrupadas por cliente, com valor pago (realizado) conciliado por mês.
+// Previsões agrupadas por contraparte (cliente ou fornecedor), com valor pago
+// (realizado) conciliado por mês.
 export async function GET(req: NextRequest) {
   try {
     const supabase = createSupabaseAdminClient()
@@ -23,67 +28,77 @@ export async function GET(req: NextRequest) {
 
     const { data: previstoRaw, error } = await supabase
       .from('planejamento_receitas')
-      .select('id, empresa_id, cliente_id, data_prevista, valor_previsto, descricao')
+      .select('id, empresa_id, cliente_id, fornecedor_id, data_prevista, valor_previsto, descricao')
       .in('empresa_id', escopo.empresaIds.length ? escopo.empresaIds : ['00000000-0000-0000-0000-000000000000'])
       .order('data_prevista')
     if (error) {
-      if (naoMigrada(error.message)) return NextResponse.json({ moeda: escopo.moeda, combinada: escopo.combinada, clientes: [] })
+      if (naoMigrada(error.message)) return NextResponse.json({ moeda: escopo.moeda, combinada: escopo.combinada, pessoas: [] })
       return NextResponse.json({ error: error.message }, { status: 500 })
     }
     const previsto = (previstoRaw ?? []).map((r) => ({ ...r, valor_previsto: Number(r.valor_previsto) })) as Linha[]
 
-    // Clientes envolvidos (nomes)
-    const clienteIds = Array.from(new Set(previsto.map((p) => p.cliente_id)))
-    const { data: clientesRaw } = clienteIds.length
-      ? await supabase.from('clientes').select('id, nome').in('id', clienteIds)
-      : { data: [] as { id: string; nome: string }[] }
-    const nomeCliente: Record<string, string> = {}
-    for (const c of clientesRaw ?? []) nomeCliente[c.id as string] = c.nome as string
+    // Contrapartes envolvidas (nomes de clientes e fornecedores)
+    const clienteIds = Array.from(new Set(previsto.filter((p) => p.cliente_id).map((p) => p.cliente_id as string)))
+    const fornecedorIds = Array.from(new Set(previsto.filter((p) => p.fornecedor_id).map((p) => p.fornecedor_id as string)))
+    const [{ data: clientesRaw }, { data: fornecedoresRaw }] = await Promise.all([
+      clienteIds.length ? supabase.from('clientes').select('id, nome').in('id', clienteIds) : Promise.resolve({ data: [] as { id: string; nome: string }[] }),
+      fornecedorIds.length ? supabase.from('fornecedores').select('id, nome').in('id', fornecedorIds) : Promise.resolve({ data: [] as { id: string; nome: string }[] }),
+    ])
+    const nome: Record<string, string> = {}
+    for (const c of clientesRaw ?? []) nome[`c:${c.id}`] = c.nome as string
+    for (const f of fornecedoresRaw ?? []) nome[`f:${f.id}`] = f.nome as string
 
-    // Realizado: créditos com cliente_id, dentro das contas do escopo, por cliente+mês (convertido)
-    const txAll = await selectAll<{ conta_id: string; cliente_id: string | null; data: string; valor: number; tipo: string }>(
-      () => supabase.from('transacoes').select('conta_id, cliente_id, data, valor, tipo').eq('tipo', 'credito')
+    const clienteSet = new Set(clienteIds)
+    const fornecedorSet = new Set(fornecedorIds)
+
+    // Realizado: créditos com a contraparte (cliente ou fornecedor), dentro das
+    // contas do escopo, por contraparte+mês (convertido).
+    const txAll = await selectAll<{ conta_id: string; cliente_id: string | null; fornecedor_id: string | null; data: string; valor: number; tipo: string }>(
+      () => supabase.from('transacoes').select('conta_id, cliente_id, fornecedor_id, data, valor, tipo').eq('tipo', 'credito')
     )
-    const txEscopo = txAll.filter((t) => t.cliente_id && escopo.contaIds.has(t.conta_id) && clienteIds.includes(t.cliente_id))
+    const txEscopo = txAll
+      .filter((t) => escopo.contaIds.has(t.conta_id))
+      .map((t) => {
+        const k = t.cliente_id && clienteSet.has(t.cliente_id) ? `c:${t.cliente_id}` : (t.fornecedor_id && fornecedorSet.has(t.fornecedor_id) ? `f:${t.fornecedor_id}` : '')
+        return { ...t, k }
+      })
+      .filter((t) => t.k)
 
-    // Taxas (só se combinada): meses das previsões + das transações
-    const meses = new Set<string>()
-    for (const p of previsto) meses.add(mesDe(p.data_prevista))
-    for (const t of txEscopo) meses.add(mesDe(t.data))
-    const taxas = escopo.combinada ? await obterTaxasMensais(Array.from(meses), false) : {}
-    const { conv, cambioIndisponivel } = criarConversor(escopo, taxas)
+    // Câmbio consolidado: última cotação disponível (só se combinada)
+    const taxa = escopo.combinada ? await obterUltimaTaxa() : null
+    const { conv, cambioIndisponivel } = criarConversor(escopo, taxa)
 
-    // realizado[cliente][mes] = soma convertida
+    // realizado[chave][mes] = soma convertida
     const realizado: Record<string, Record<string, number>> = {}
     for (const t of txEscopo) {
       const m = mesDe(t.data)
       const v = conv(Number(t.valor), escopo.moedaPorConta[t.conta_id], m)
-      realizado[t.cliente_id!] ??= {}
-      realizado[t.cliente_id!][m] = round((realizado[t.cliente_id!][m] ?? 0) + v)
+      realizado[t.k] ??= {}
+      realizado[t.k][m] = round((realizado[t.k][m] ?? 0) + v)
     }
 
     const hoje = hojeISO()
 
-    // Agrupa por cliente; converte previsto pela moeda da empresa da linha; concilia por mês (waterfall)
-    type LinhaOut = { id: string; data_prevista: string; valor_previsto: number; valor_pago: number; status: string; descricao: string | null }
-    const porCliente: Record<string, LinhaOut[]> = {}
-    // Agrupa linhas por cliente+mês para o waterfall
+    // Concilia por contraparte+mês (waterfall)
     const grupos: Record<string, Linha[]> = {}
     for (const p of previsto) {
-      const chave = `${p.cliente_id}|${mesDe(p.data_prevista)}`
-      ;(grupos[chave] ??= []).push(p)
+      const g = `${chave(p.cliente_id, p.fornecedor_id)}|${mesDe(p.data_prevista)}`
+      ;(grupos[g] ??= []).push(p)
     }
     const pagoPorId: Record<string, number> = {}
-    for (const [chave, linhas] of Object.entries(grupos)) {
-      const [clienteId, mes] = chave.split('|')
-      const realizadoMes = realizado[clienteId]?.[mes] ?? 0
+    for (const [g, linhas] of Object.entries(grupos)) {
+      const [k, mes] = g.split('|')
+      const realizadoMes = realizado[k]?.[mes] ?? 0
       Object.assign(pagoPorId, distribuirWaterfall(linhas, realizadoMes))
     }
 
+    type LinhaOut = { id: string; data_prevista: string; valor_previsto: number; valor_pago: number; status: string; descricao: string | null }
+    const porPessoa: Record<string, LinhaOut[]> = {}
     for (const p of previsto) {
+      const k = chave(p.cliente_id, p.fornecedor_id)
       const prevConv = conv(p.valor_previsto, escopo.moedaEmpresa[p.empresa_id] ?? 'BRL', mesDe(p.data_prevista))
       const pago = round(pagoPorId[p.id] ?? 0)
-      ;(porCliente[p.cliente_id] ??= []).push({
+      ;(porPessoa[k] ??= []).push({
         id: p.id,
         data_prevista: p.data_prevista,
         valor_previsto: round(prevConv),
@@ -93,28 +108,37 @@ export async function GET(req: NextRequest) {
       })
     }
 
-    const clientes = Object.entries(porCliente).map(([cliente_id, linhas]) => ({
-      cliente_id,
-      nome: nomeCliente[cliente_id] ?? '—',
+    const pessoas = Object.entries(porPessoa).map(([k, linhas]) => ({
+      pessoa_id: idDaChave(k),
+      pessoa_tipo: tipoDaChave(k),
+      nome: nome[k] ?? '—',
       linhas: linhas.sort((a, b) => a.data_prevista.localeCompare(b.data_prevista)),
       total_previsto: round(linhas.reduce((s, l) => s + l.valor_previsto, 0)),
       total_pago: round(linhas.reduce((s, l) => s + l.valor_pago, 0)),
     })).sort((a, b) => a.nome.localeCompare(b.nome))
 
-    return NextResponse.json({ moeda: escopo.moeda, combinada: escopo.combinada, cambioIndisponivel, clientes })
+    return NextResponse.json({ moeda: escopo.moeda, combinada: escopo.combinada, cambioIndisponivel, pessoas })
   } catch (err: unknown) {
     return NextResponse.json({ error: err instanceof Error ? err.message : 'Erro interno' }, { status: 500 })
   }
 }
 
-// POST: cria uma ou várias previsões. Body: { empresa_id, cliente_id, data_prevista, valor_previsto, descricao?, repetir?: { meses: number } }
+// POST: cria uma ou várias previsões.
+// Body: { empresa_id, pessoa_tipo: 'cliente'|'fornecedor', pessoa_id, data_prevista, valor_previsto, descricao?, repetir?: { meses } }
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json()
-    const { empresa_id, cliente_id, data_prevista, descricao } = body
+    const { empresa_id, data_prevista, descricao } = body
+    // Compat: aceita pessoa_tipo/pessoa_id ou cliente_id direto
+    const pessoaTipo = body.pessoa_tipo ?? (body.cliente_id ? 'cliente' : body.fornecedor_id ? 'fornecedor' : undefined)
+    const pessoaId = body.pessoa_id ?? body.cliente_id ?? body.fornecedor_id
     const valor_previsto = Number(body.valor_previsto)
-    if (!empresa_id || !cliente_id || !data_prevista) return NextResponse.json({ error: 'empresa_id, cliente_id e data_prevista são obrigatórios' }, { status: 400 })
+    if (!empresa_id || !pessoaId || !['cliente', 'fornecedor'].includes(pessoaTipo) || !data_prevista) {
+      return NextResponse.json({ error: 'empresa_id, contraparte (cliente/fornecedor) e data_prevista são obrigatórios' }, { status: 400 })
+    }
     if (!Number.isFinite(valor_previsto) || valor_previsto < 0) return NextResponse.json({ error: 'valor_previsto inválido' }, { status: 400 })
+
+    const fk = pessoaTipo === 'cliente' ? { cliente_id: pessoaId, fornecedor_id: null } : { cliente_id: null, fornecedor_id: pessoaId }
 
     const rows: Record<string, unknown>[] = []
     const nMeses = Math.max(1, Math.min(Number(body?.repetir?.meses) || 1, 60)) // até 60 meses
@@ -122,7 +146,7 @@ export async function POST(req: NextRequest) {
     for (let i = 0; i < nMeses; i++) {
       const d = new Date(ano, (mes - 1) + i, dia)
       const iso = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
-      rows.push({ empresa_id, cliente_id, data_prevista: iso, valor_previsto, descricao: descricao?.toString().trim() || null })
+      rows.push({ empresa_id, ...fk, data_prevista: iso, valor_previsto, descricao: descricao?.toString().trim() || null })
     }
 
     const supabase = createSupabaseAdminClient()

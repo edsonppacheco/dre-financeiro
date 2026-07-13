@@ -2,7 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import ExcelJS from 'exceljs'
 import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
 import { calcularDreMulti, type PlanoLinha } from '@/lib/dre-plano'
-import { obterTaxasMensais, converterComTaxas } from '@/lib/cambio'
+import { obterUltimaTaxa, converterComUltima } from '@/lib/cambio'
 import type { Moeda } from '@/lib/formato'
 
 type TxAgg = { conta_id: string; data: string; valor: number; tipo: string; conta_contabil_id: string | null }
@@ -67,8 +67,9 @@ export async function GET(req: NextRequest) {
         .not('conta_contabil_id', 'is', null).gte('data', rangeIni).lte('data', rangeFim))
     )
 
-    const taxas = combinada ? await obterTaxasMensais(txs.map((t) => t.data.slice(0, 7))) : {}
-    const conv = (valor: number, deMoeda: Moeda, mes: string) => combinada ? converterComTaxas(valor, deMoeda, moeda, mes, taxas) : valor
+    // Câmbio consolidado: última cotação disponível (coerente com Painel/DRE)
+    const taxa = combinada ? await obterUltimaTaxa() : null
+    const conv = (valor: number, deMoeda: Moeda, _mes?: string) => combinada ? converterComUltima(valor, deMoeda, moeda, taxa) : valor
 
     const somasPorColuna: Record<string, Record<string, number>> = {}
     for (const col of colunas) somasPorColuna[col.chave] = {}

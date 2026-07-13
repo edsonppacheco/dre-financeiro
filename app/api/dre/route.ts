@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
 import { calcularDreMulti, type PlanoLinha } from '@/lib/dre-plano'
-import { obterTaxasMensais, converterComTaxas } from '@/lib/cambio'
+import { obterUltimaTaxa, converterComUltima } from '@/lib/cambio'
 import type { Moeda } from '@/lib/formato'
 
 type TxAgg = { conta_id: string; data: string; valor: number; tipo: string; conta_contabil_id: string | null }
@@ -95,23 +95,15 @@ export async function GET(req: NextRequest) {
     const { data: transfsRaw } = await transfsQuery
     const transfs = (transfsRaw ?? []) as TransfAgg[]
 
-    // Taxas de câmbio dos meses envolvidos, buscadas de uma vez
-    const mesesEnvolvidos = new Set<string>()
-    for (const t of [...txs, ...txAll]) mesesEnvolvidos.add(t.data.slice(0, 7))
-    for (const t of transfs) mesesEnvolvidos.add(t.data.slice(0, 7))
-    for (const col of colunas) mesesEnvolvidos.add(col.fim.slice(0, 7))
+    // Câmbio consolidado: última cotação disponível, aplicada a TODOS os valores
+    // (fluxos e saldos) — mantém as colunas de período coerentes entre si e com o
+    // Painel. Só lê do banco; avisa se não houver cotação.
     const mesMaisAntigo = todasDatas.length ? [...todasDatas].sort()[0].slice(0, 7) : rangeIni.slice(0, 7)
-    mesesEnvolvidos.add(mesMaisAntigo)
-    // Mês corrente: a cotação atual serve de fallback p/ saldo do período em
-    // andamento, cujo fim (ex: dez do ano corrente) ainda não tem taxa.
-    mesesEnvolvidos.add(new Date().toISOString().slice(0, 7))
-    // Lê só do banco (sem buscar na AwesomeAPI no request); avisa se faltar.
-    const taxas = combinada ? await obterTaxasMensais([...mesesEnvolvidos], false) : {}
-    const cambioIndisponivel = combinada && Object.keys(taxas).length === 0
-    const conv = (valor: number, deMoeda: Moeda, mes: string) => combinada ? converterComTaxas(valor, deMoeda, moeda, mes, taxas) : valor
+    const taxa = combinada ? await obterUltimaTaxa() : null
+    const cambioIndisponivel = combinada && taxa == null
+    const conv = (valor: number, deMoeda: Moeda, _mes?: string) => combinada ? converterComUltima(valor, deMoeda, moeda, taxa) : valor
 
-    // Soma por conta contábil, por coluna — cada transação convertida pela taxa
-    // do seu próprio mês (taxa média ponderada, padrão para itens de fluxo/DRE)
+    // Soma por conta contábil, por coluna (todos convertidos pela última cotação)
     const somasPorColuna: Record<string, Record<string, number>> = {}
     for (const col of colunas) somasPorColuna[col.chave] = {}
     for (const t of txs) {

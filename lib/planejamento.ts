@@ -4,7 +4,7 @@
 
 import type { SupabaseClient } from '@supabase/supabase-js'
 import type { Moeda } from './formato'
-import { converterComTaxas } from './cambio'
+import { converterComUltima } from './cambio'
 
 export type Status = 'pago' | 'parcial' | 'a_vencer' | 'atrasado'
 
@@ -57,14 +57,16 @@ export async function montarEscopo(
 }
 
 /**
- * Cria a função de conversão a partir de um mapa de taxas já carregado. Fora da
- * visão combinada, é identidade (não converte). Sinaliza `cambioIndisponivel`
- * quando é combinada mas nenhuma taxa foi encontrada.
+ * Cria a função de conversão a partir da última cotação disponível (taxa única).
+ * Fora da visão combinada, é identidade (não converte). Sinaliza
+ * `cambioIndisponivel` quando é combinada mas não há taxa. O `mes` é ignorado
+ * (mantido na assinatura por compatibilidade): a conversão consolidada usa
+ * sempre a cotação mais recente.
  */
-export function criarConversor(escopo: Escopo, taxas: Record<string, number>) {
-  const cambioIndisponivel = escopo.combinada && Object.keys(taxas).length === 0
-  const conv = (valor: number, de: Moeda, mes: string) =>
-    escopo.combinada ? converterComTaxas(valor, de, escopo.moeda, mes, taxas) : valor
+export function criarConversor(escopo: Escopo, taxa: number | null) {
+  const cambioIndisponivel = escopo.combinada && taxa == null
+  const conv = (valor: number, de: Moeda, _mes?: string) =>
+    escopo.combinada ? converterComUltima(valor, de, escopo.moeda, taxa) : valor
   return { conv, cambioIndisponivel }
 }
 

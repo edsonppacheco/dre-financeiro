@@ -4,10 +4,11 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useEmpresas } from './EmpresaProvider'
 import { fmtMoeda, type Moeda } from '@/lib/formato'
 
+type PessoaTipo = 'cliente' | 'fornecedor'
 type LinhaRec = { id: string; data_prevista: string; valor_previsto: number; valor_pago: number; status: string; descricao: string | null }
-type CardCliente = { cliente_id: string; nome: string; linhas: LinhaRec[]; total_previsto: number; total_pago: number }
-type Resp = { moeda: Moeda; combinada: boolean; cambioIndisponivel?: boolean; clientes: CardCliente[] }
-type Cliente = { id: string; nome: string }
+type CardPessoa = { pessoa_id: string; pessoa_tipo: PessoaTipo; nome: string; linhas: LinhaRec[]; total_previsto: number; total_pago: number }
+type Resp = { moeda: Moeda; combinada: boolean; cambioIndisponivel?: boolean; pessoas: CardPessoa[] }
+type Pessoa = { id: string; nome: string }
 
 const fmtData = (s: string) => { const [a, m, d] = s.split('-'); return `${d}/${m}/${a}` }
 
@@ -17,13 +18,17 @@ const STATUS: Record<string, { label: string; cls: string }> = {
   a_vencer: { label: 'A vencer', cls: 'bg-slate-100 text-slate-600' },
   atrasado: { label: 'Em atraso', cls: 'bg-red-100 text-red-700' },
 }
+const TIPO_BADGE: Record<PessoaTipo, string> = {
+  cliente: 'bg-sky-100 text-sky-700',
+  fornecedor: 'bg-violet-100 text-violet-700',
+}
 
 export default function PlanejamentoReceitas() {
   const { empresas, selecionadas, combinada, moedaCombinada } = useEmpresas()
   const [dados, setDados] = useState<Resp | null>(null)
   const [erro, setErro] = useState<string | null>(null)
   const [loading, setLoading] = useState(true)
-  const [modal, setModal] = useState<null | { cliente_id?: string; nome?: string }>(null)
+  const [modal, setModal] = useState<null | { pessoa_tipo?: PessoaTipo; pessoa_id?: string; nome?: string }>(null)
   const [editando, setEditando] = useState<LinhaRec | null>(null)
 
   const qs = useMemo(() => {
@@ -55,7 +60,7 @@ export default function PlanejamentoReceitas() {
   return (
     <div>
       <div className="flex items-center justify-between mb-4">
-        <p className="text-sm text-slate-500">Base: clientes. Cada card mostra os recebimentos previstos e o realizado (conciliado por mês).</p>
+        <p className="text-sm text-slate-500">Base: contrapartes (clientes ou fornecedores). Cada card mostra os recebimentos previstos e o realizado (conciliado por mês).</p>
         <button onClick={() => setModal({})} className="bg-slate-800 text-white text-sm font-medium px-4 py-2 rounded-lg hover:bg-slate-700">
           + Nova previsão
         </button>
@@ -70,26 +75,29 @@ export default function PlanejamentoReceitas() {
 
       {loading ? (
         <p className="text-slate-400 text-sm">Carregando…</p>
-      ) : !dados?.clientes.length ? (
+      ) : !dados?.pessoas.length ? (
         <div className="text-center py-16 text-slate-400">
           <p>Nenhuma previsão de receita cadastrada.</p>
           <button onClick={() => setModal({})} className="mt-3 text-slate-700 underline text-sm">Criar a primeira</button>
         </div>
       ) : (
         <div className="grid gap-4 md:grid-cols-2">
-          {dados.clientes.map((c) => {
+          {dados.pessoas.map((c) => {
             const atrasadas = c.linhas.filter((l) => l.status === 'atrasado').length
             return (
-              <div key={c.cliente_id} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
+              <div key={`${c.pessoa_tipo}:${c.pessoa_id}`} className="bg-white rounded-xl border border-slate-200 overflow-hidden">
                 <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
                   <div>
-                    <p className="font-semibold text-slate-800">{c.nome}</p>
+                    <p className="font-semibold text-slate-800 flex items-center gap-2">
+                      {c.nome}
+                      <span className={`text-[10px] font-medium px-1.5 py-0.5 rounded-full ${TIPO_BADGE[c.pessoa_tipo]}`}>{c.pessoa_tipo === 'cliente' ? 'Cliente' : 'Fornecedor'}</span>
+                    </p>
                     <p className="text-xs text-slate-500">
                       Previsto {fmtMoeda(c.total_previsto, moeda)} · Recebido {fmtMoeda(c.total_pago, moeda)}
                       {atrasadas > 0 && <span className="text-red-600 font-medium"> · {atrasadas} em atraso</span>}
                     </p>
                   </div>
-                  <button onClick={() => setModal({ cliente_id: c.cliente_id, nome: c.nome })} className="text-slate-500 hover:text-slate-800 text-sm" title="Adicionar lançamento">+ Lançar</button>
+                  <button onClick={() => setModal({ pessoa_tipo: c.pessoa_tipo, pessoa_id: c.pessoa_id, nome: c.nome })} className="text-slate-500 hover:text-slate-800 text-sm" title="Adicionar lançamento">+ Lançar</button>
                 </div>
                 <table className="w-full text-sm">
                   <tbody>
@@ -119,7 +127,7 @@ export default function PlanejamentoReceitas() {
         <ModalNova
           empresas={empresas}
           selecionadas={selecionadas}
-          clientePreset={modal.cliente_id ? { id: modal.cliente_id, nome: modal.nome ?? '' } : undefined}
+          pessoaPreset={modal.pessoa_id && modal.pessoa_tipo ? { tipo: modal.pessoa_tipo, id: modal.pessoa_id, nome: modal.nome ?? '' } : undefined}
           onClose={() => setModal(null)}
           onSalvo={() => { setModal(null); carregar() }}
         />
@@ -131,16 +139,18 @@ export default function PlanejamentoReceitas() {
   )
 }
 
-function ModalNova({ empresas, selecionadas, clientePreset, onClose, onSalvo }: {
+function ModalNova({ empresas, selecionadas, pessoaPreset, onClose, onSalvo }: {
   empresas: { id: string; nome: string; moeda: Moeda }[]
   selecionadas: string[]
-  clientePreset?: { id: string; nome: string }
+  pessoaPreset?: { tipo: PessoaTipo; id: string; nome: string }
   onClose: () => void
   onSalvo: () => void
 }) {
-  const [clientes, setClientes] = useState<Cliente[]>([])
+  const [clientes, setClientes] = useState<Pessoa[]>([])
+  const [fornecedores, setFornecedores] = useState<Pessoa[]>([])
   const [empresaId, setEmpresaId] = useState(selecionadas[0] ?? empresas[0]?.id ?? '')
-  const [clienteId, setClienteId] = useState(clientePreset?.id ?? '')
+  // valor do <select>: "cliente:<id>" ou "fornecedor:<id>"
+  const [pessoaSel, setPessoaSel] = useState(pessoaPreset ? `${pessoaPreset.tipo}:${pessoaPreset.id}` : '')
   const [data, setData] = useState('')
   const [valor, setValor] = useState('')
   const [repetir, setRepetir] = useState(1)
@@ -148,17 +158,19 @@ function ModalNova({ empresas, selecionadas, clientePreset, onClose, onSalvo }: 
   const [erro, setErro] = useState<string | null>(null)
 
   useEffect(() => {
-    if (clientePreset) return
+    if (pessoaPreset) return
     fetch('/api/clientes').then((r) => r.json()).then((d) => setClientes(d.pessoas ?? [])).catch(() => {})
-  }, [clientePreset])
+    fetch('/api/fornecedores').then((r) => r.json()).then((d) => setFornecedores(d.pessoas ?? [])).catch(() => {})
+  }, [pessoaPreset])
 
   const salvar = async () => {
     setErro(null)
-    if (!empresaId || !clienteId || !data || !valor) { setErro('Preencha empresa, cliente, data e valor.'); return }
+    if (!empresaId || !pessoaSel || !data || !valor) { setErro('Preencha empresa, contraparte, data e valor.'); return }
+    const [pessoa_tipo, pessoa_id] = pessoaSel.split(':')
     setBusy(true)
     const r = await fetch('/api/planejamento/receitas', {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ empresa_id: empresaId, cliente_id: clienteId, data_prevista: data, valor_previsto: Number(valor), repetir: { meses: repetir } }),
+      body: JSON.stringify({ empresa_id: empresaId, pessoa_tipo, pessoa_id, data_prevista: data, valor_previsto: Number(valor), repetir: { meses: repetir } }),
     })
     const d = await r.json()
     setBusy(false)
@@ -175,13 +187,22 @@ function ModalNova({ empresas, selecionadas, clientePreset, onClose, onSalvo }: 
           </select>
         </Campo>
       )}
-      <Campo label="Cliente">
-        {clientePreset ? (
-          <input value={clientePreset.nome} disabled className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-500" />
+      <Campo label="Contraparte (cliente ou fornecedor)">
+        {pessoaPreset ? (
+          <input value={`${pessoaPreset.nome} (${pessoaPreset.tipo === 'cliente' ? 'Cliente' : 'Fornecedor'})`} disabled className="w-full border border-slate-200 bg-slate-50 rounded-lg px-3 py-2 text-sm text-slate-500" />
         ) : (
-          <select value={clienteId} onChange={(e) => setClienteId(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
+          <select value={pessoaSel} onChange={(e) => setPessoaSel(e.target.value)} className="w-full border border-slate-300 rounded-lg px-3 py-2 text-sm">
             <option value="">Selecione…</option>
-            {clientes.map((c) => <option key={c.id} value={c.id}>{c.nome}</option>)}
+            {clientes.length > 0 && (
+              <optgroup label="Clientes">
+                {clientes.map((c) => <option key={`c${c.id}`} value={`cliente:${c.id}`}>{c.nome}</option>)}
+              </optgroup>
+            )}
+            {fornecedores.length > 0 && (
+              <optgroup label="Fornecedores">
+                {fornecedores.map((f) => <option key={`f${f.id}`} value={`fornecedor:${f.id}`}>{f.nome}</option>)}
+              </optgroup>
+            )}
           </select>
         )}
       </Campo>
