@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
-import { obterTaxasMensais, converterComTaxas } from '@/lib/cambio'
+import { obterUltimaTaxa, converterComUltima } from '@/lib/cambio'
 import type { Moeda } from '@/lib/formato'
 
 const round = (x: number) => Math.round(x * 100) / 100
@@ -56,17 +56,14 @@ export async function GET(req: NextRequest) {
     const mesAtual = new Date().toISOString().slice(0, 7)
     let ultima: string | null = null
     for (const t of txFiltradas) if (!ultima || (t.data as string) > ultima) ultima = t.data as string
-    const mesesEnvolvidos = Array.from(new Set(txFiltradas.map((t) => (t.data as string).slice(0, 7))))
-    mesesEnvolvidos.push(mesAtual)
-    // Lê só do banco (sem buscar na AwesomeAPI dentro do request). Se faltar,
-    // sinaliza para a UI pedir "Atualizar câmbio" em vez de mostrar número errado.
-    const taxas = combinada ? await obterTaxasMensais(mesesEnvolvidos, false) : {}
-    const cambioIndisponivel = combinada && Object.keys(taxas).length === 0
-    const conv = (valor: number, deMoeda: Moeda, mes: string) => combinada ? converterComTaxas(valor, deMoeda, moeda, mes, taxas) : valor
+    // Câmbio consolidado: última cotação disponível, aplicada a fluxos e saldos.
+    // Lê só do banco; se faltar, sinaliza para a UI pedir "Atualizar câmbio".
+    const taxa = combinada ? await obterUltimaTaxa() : null
+    const cambioIndisponivel = combinada && taxa == null
+    const conv = (valor: number, deMoeda: Moeda, _mes?: string) => combinada ? converterComUltima(valor, deMoeda, moeda, taxa) : valor
 
     // Saldos por conta (acumulados na moeda nativa, convertidos só no final) +
-    // mapa mensal de receita/despesa (cada transação convertida pela taxa do
-    // seu próprio mês — tratamento mês a mês, mais preciso que uma taxa única).
+    // mapa mensal de receita/despesa (tudo convertido pela última cotação disponível).
     const saldoNativo: Record<string, number> = {}
     for (const c of contasFiltradas) saldoNativo[c.id] = Number(c.saldo_inicial ?? 0)
     const porMes: Record<string, RD> = {}
@@ -86,9 +83,7 @@ export async function GET(req: NextRequest) {
     }
     const rd = (m: string): RD => porMes[m] ?? { receita: 0, despesa: 0 }
 
-    // Saldos = posição atual → convertidos pela cotação atual (mês corrente).
-    // O resolverTaxa cai para a taxa disponível mais recente se o mês corrente
-    // ainda não tiver cotação registrada.
+    // Saldos = posição atual → convertidos pela última cotação disponível (idem fluxos).
     const contas = contasFiltradas.map((c) => ({
       nome: c.nome, tipo: c.tipo,
       saldo: round(conv(saldoNativo[c.id] ?? 0, moedaPorConta[c.id], mesAtual)),

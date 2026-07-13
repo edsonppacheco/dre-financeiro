@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
-import { obterTaxasMensais, converterComTaxas } from '@/lib/cambio'
+import { obterUltimaTaxa, converterComUltima } from '@/lib/cambio'
 import type { Moeda } from '@/lib/formato'
 
 const round = (x: number) => Math.round(x * 100) / 100
@@ -72,11 +72,11 @@ export async function GET(req: NextRequest) {
     const moedaComum: Moeda = combinada ? moedaParam : ((moedaEmpresa[empresasEmUso[0]] as Moeda) ?? 'BRL')
 
     // Câmbio: sempre necessário porque toda tabela mostra acumulado em R$ E US$.
-    // Lê do banco (mesmo critério da DRE — taxa média do mês, sem buscar no request).
+    // Última cotação disponível (mesmo critério da DRE/Painel), lida só do banco.
     const meses = Array.from(new Set(txsFiltradas.map((t) => t.data.slice(0, 7)))).sort()
-    const taxas = await obterTaxasMensais(meses, false)
-    const cambioIndisponivel = meses.length > 0 && Object.keys(taxas).length === 0
-    const conv = (valor: number, de: Moeda, para: Moeda, mes: string) => converterComTaxas(valor, de, para, mes, taxas)
+    const taxa = await obterUltimaTaxa()
+    const cambioIndisponivel = txsFiltradas.length > 0 && taxa == null
+    const conv = (valor: number, de: Moeda, para: Moeda, _mes?: string) => converterComUltima(valor, de, para, taxa)
 
     // Agregação bruta na moeda nativa: pessoa->empresa->mes e empresa->mes
     type Bruto = { investido: number; recebido: number }

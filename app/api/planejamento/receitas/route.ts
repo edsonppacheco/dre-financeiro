@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient, selectAll } from '@/lib/supabase'
-import { obterTaxasMensais } from '@/lib/cambio'
+import { obterUltimaTaxa } from '@/lib/cambio'
 import type { Moeda } from '@/lib/formato'
 import { montarEscopo, criarConversor, distribuirWaterfall, statusReceita, round, hojeISO, mesDe } from '@/lib/planejamento'
 import { registrarAtividade } from '@/lib/atividades'
@@ -64,12 +64,9 @@ export async function GET(req: NextRequest) {
       })
       .filter((t) => t.k)
 
-    // Taxas (só se combinada): meses das previsões + das transações
-    const meses = new Set<string>()
-    for (const p of previsto) meses.add(mesDe(p.data_prevista))
-    for (const t of txEscopo) meses.add(mesDe(t.data))
-    const taxas = escopo.combinada ? await obterTaxasMensais(Array.from(meses), false) : {}
-    const { conv, cambioIndisponivel } = criarConversor(escopo, taxas)
+    // Câmbio consolidado: última cotação disponível (só se combinada)
+    const taxa = escopo.combinada ? await obterUltimaTaxa() : null
+    const { conv, cambioIndisponivel } = criarConversor(escopo, taxa)
 
     // realizado[chave][mes] = soma convertida
     const realizado: Record<string, Record<string, number>> = {}

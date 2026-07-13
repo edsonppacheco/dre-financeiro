@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { createSupabaseAdminClient } from '@/lib/supabase'
-import { obterTaxasMensais } from '@/lib/cambio'
+import { obterUltimaTaxa } from '@/lib/cambio'
 import type { Moeda } from '@/lib/formato'
 import { montarEscopo, criarConversor, round, mesDe } from '@/lib/planejamento'
 
@@ -47,8 +47,9 @@ export async function GET(req: NextRequest) {
     const despesas = (desp.data ?? []).map((r) => ({ empresa_id: r.empresa_id as string, conta_contabil_id: r.conta_contabil_id as string, mes: r.mes as string, valor: Number(r.valor_previsto) }))
       .filter((r) => janelaSet.has(r.mes))
 
-    const taxas = escopo.combinada ? await obterTaxasMensais(janela, false) : {}
-    const { conv, cambioIndisponivel } = criarConversor(escopo, taxas)
+    // Câmbio consolidado: última cotação disponível (só se combinada)
+    const taxa = escopo.combinada ? await obterUltimaTaxa() : null
+    const { conv, cambioIndisponivel } = criarConversor(escopo, taxa)
 
     // Série por mês
     const porMes: Record<string, { receita: number; despesa: number }> = {}
