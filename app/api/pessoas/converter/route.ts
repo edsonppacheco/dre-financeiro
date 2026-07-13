@@ -29,6 +29,12 @@ export async function POST(req: NextRequest) {
     // Repõe transações: a FK de origem vira a FK de destino com o novo id
     await supabase.from('transacoes').update({ [fkDestino]: criado.id, [fkOrigem]: null }).eq(fkOrigem, id)
 
+    // Repõe previsões de receita que apontam para esta contraparte (best-effort:
+    // ignora se a coluna ainda não foi migrada)
+    try {
+      await supabase.from('planejamento_receitas').update({ [fkDestino]: criado.id, [fkOrigem]: null }).eq(fkOrigem, id)
+    } catch { /* migration 013 ainda não aplicada */ }
+
     // Remove o cadastro antigo (transações já foram repostas)
     await supabase.from(origem).delete().eq('id', id)
 

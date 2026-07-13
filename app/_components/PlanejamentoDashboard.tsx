@@ -82,7 +82,7 @@ export default function PlanejamentoDashboard() {
           </div>
 
           <div className="grid gap-4 md:grid-cols-2">
-            <Lista titulo="Clientes previstos (receitas)" itens={dados.clientes} moeda={moeda} vazio="Nenhuma receita prevista no período." />
+            <Lista titulo="Contrapartes previstas (receitas)" itens={dados.clientes} moeda={moeda} vazio="Nenhuma receita prevista no período." />
             <Lista titulo="Contas previstas (despesas)" itens={dados.contas} moeda={moeda} vazio="Nenhuma despesa prevista no período." mostrarCodigo />
           </div>
         </>
