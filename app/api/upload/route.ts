@@ -186,10 +186,20 @@ export async function POST(req: NextRequest) {
 
       // Saldo inicial e saldos diários do documento.
       try {
-        // Só define o saldo inicial (abertura de TODO o histórico) quando:
-        //  - QBO (autoritativo: o saldo corrente do documento é a fonte da verdade), ou
-        //  - a conta ainda não tinha nenhum lançamento (este é o 1º import).
-        if (saldoInicial !== null && (saldoInicialAutoritativo || !contaJaTinhaTransacoes)) {
+        // O saldo inicial é a abertura de TODO o histórico. Um arquivo de
+        // sub-período (ex: QBO/extrato de um mês) traz a abertura do SEU período
+        // — um saldo do MEIO do histórico — que não pode virar o saldo inicial da
+        // conta. Só (re)define a abertura quando o arquivo cobre o INÍCIO: nenhuma
+        // transação anterior à 1ª data do arquivo.
+        let arquivoCobreInicio = !contaJaTinhaTransacoes
+        if (!arquivoCobreInicio && datasDoArquivo.length > 0) {
+          const { count: txAnteriores } = await supabase
+            .from('transacoes').select('id', { count: 'exact', head: true })
+            .eq('conta_id', contaId).lt('data', datasDoArquivo[0])
+          arquivoCobreInicio = (txAnteriores ?? 0) === 0
+        }
+        // Define quando cobre o início E (QBO autoritativo, ou 1º import da conta).
+        if (saldoInicial !== null && arquivoCobreInicio && (saldoInicialAutoritativo || !contaJaTinhaTransacoes)) {
           await supabase.from('contas').update({ saldo_inicial: saldoInicial }).eq('id', contaId)
         }
         if (saldosDiaParaImportar.length > 0) {
